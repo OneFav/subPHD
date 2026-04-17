@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "assignment_id": "",
+  "run_id": null,
+  "watch_status": "idle",
+  "runner_active": false,
+  "supervisor_polling": false,
+  "remote_screen_names": [],
+  "remote_jsons": [],
+  "local_evidence_paths": null,
+  "last_remote_activity_at": null,
+  "failure_reason": null,
+  "updated_at": "2026-04-17T08:44:23Z"
+}

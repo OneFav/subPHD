@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "phase": "reader",
+  "role_context_mode": "isolated",
+  "current_objective": "",
+  "agent_program_ref": null,
+  "reader_iteration": 0,
+  "reader_iteration_cap": 100,
+  "runner_iteration": 0,
+  "runner_iteration_cap": 1,
+  "success_condition": "",
+  "run_id": null,
+  "remote_status": "idle",
+  "last_result_summary": "",
+  "next_action": "reader",
+  "pending_human_prompt": null,
+  "repair_count": 0,
+  "last_error": null,
+  "updated_at": "2026-04-17T08:44:23Z"
+}

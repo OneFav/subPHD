@@ -1,0 +1,18 @@
+.omx/
+__pycache__/
+*.pyc
+
+# Runtime artifacts that should not be re-committed after initialization
+.subphd/last-launch-metadata.json
+.subphd/autoloop/*
+!.subphd/autoloop/.gitkeep
+.subphd/commands/*
+!.subphd/commands/.gitkeep
+.subphd/prompts/*
+!.subphd/prompts/.gitkeep
+.subphd/reports/*
+!.subphd/reports/.gitkeep
+.subphd/synced-results/*
+!.subphd/synced-results/.gitkeep
+.subphd/logs/dashboard-start.stdout.log
+.subphd/logs/dashboard-start.stderr.log

@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "next_agent": "reader",
+  "remaining_global_budget": {
+    "hours": 8.0,
+    "max_runs": 100,
+    "gpu_count": 4
+  },
+  "last_transition_reason": "publishable_starter_init",
+  "last_watch_status": "idle",
+  "last_resume_mode": "fresh",
+  "last_prompt_role": null,
+  "last_prompt_path": null,
+  "prompt_contract_hash": null,
+  "updated_at": "2026-04-17T08:44:23Z"
+}

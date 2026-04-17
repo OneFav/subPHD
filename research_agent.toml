@@ -1,0 +1,42 @@
+project_name = "portable-starter"
+default_model = "gpt-5.4"
+default_hours = 8
+default_max_runs = 100
+default_poll_seconds = 300
+
+[remote]
+ssh_key = ""
+host = ""
+port = 22
+remote_code_dir = ""
+remote_result_dir = ""
+gpu_count = 1
+
+[logs]
+results_jsonl = "research/results.jsonl"
+experiment_log_md = "research/EXPERIMENT_LOG.md"
+claims_md = "research/CLAIMS.md"
+memory_md = "research/MEMORY.md"
+next_experiment_md = "research/NEXT_EXPERIMENT.md"
+
+[artifacts]
+person_program = "person_program.md"
+agent_program = "agent_program.md"
+loop_state = ".subphd/state/research_loop_state.json"
+watch_snapshot = ".subphd/state/research_watch_snapshot.json"
+watch_events = ".subphd/state/research_watch_events.jsonl"
+run_state = ".subphd/state/run-state.json"
+ai_worklog = ".subphd/logs/ai-worklog.md"
+agent_observability = ".subphd/state/agent-observability.json"
+
+[runtime]
+root = ".subphd"
+workspace_root = "."
+roles_root = "roles"
+backend = "codex"
+compat_omx_export = false
+legacy_runtime_root = ".autoresearch"
+
+[loop]
+slow_heartbeat_seconds = 300
+gpu_count = 4
