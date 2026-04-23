@@ -106,7 +106,7 @@ After initialization, the intended user workflow is:
 1. put project code under `research/`
 2. use `subphd-program-refinement` when you want Codex to improve or rewrite `person_program.md`
 3. use `subphd-run-disclosure` when you want Codex to explain what the current run is doing and what evidence it has produced
-3. start the loop with the command-line or `.bat` entrypoint
+4. start the loop with the command-line or `.bat` entrypoint
 
 ## Non-Goals
 - Do not automatically rewrite user business code.

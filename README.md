@@ -1,46 +1,84 @@
-# sub-PHD Migration Starter
+﻿# sub-PHD
 
-This package contains the minimal reusable sub-PHD runtime framework for moving into a new project.
+> An AI grad student for your PhD: you assign research, it does the work.
+
+sub-PHD is a local reader/runner runtime for research loops. You keep the scientific judgment. The agent keeps the loop moving: reading, planning, coding, running, and reporting.
+
+## Best install method
+The most convenient and reliable way to install this project is to let Codex do it for you.
+
+Give Codex this exact instruction:
+
+```text
+Read https://github.com/OneFav/subPHD/blob/main/index.md and install the project locally.
+```
+
+That `index.md` file is the agent-facing setup contract. It tells Codex how to deploy the shipped skills, initialize the starter, and validate that the runtime works.
+
+## What sub-PHD is for
+Use sub-PHD when you want an agent to run the repetitive part of a research loop while you stay in charge of:
+- choosing the question
+- deciding what matters
+- reviewing evidence
+- rewriting the mission
+
+It is not a generic AI copilot and not a fully autonomous "AI scientist". It is closer to an AI grad student working under your direction.
+
+## Quick start
+1. Clone the repo.
+2. Ask Codex to read `index.md` and install the project locally.
+3. Edit `person_program.md`.
+4. Start the loop with `start.bat` or the Python entrypoint.
+
+## The only file you normally edit
+`person_program.md`
+
+That is the main human-owned mission file. You update it when you want to:
+- change the research direction
+- tighten priorities
+- redefine success criteria
+- start a new stage of work
+
+## Two built-in skills
+This starter ships two sub-PHD skills and the docs assume you use them.
+
+### `subphd-run-disclosure`
+Use this when you want Codex to explain:
+- what the current run window is doing
+- what conclusions are supported
+- what evidence exists
+- how complete the run is versus `person_program.md`
+
+### `subphd-program-refinement`
+Use this when you want Codex to:
+- refine a vague next research direction
+- propose a better rewrite of `person_program.md`
+- keep the mission correct without making it too rigid too early
+
+## Runtime model
+- `start.bat` = fresh big-round start
+- `resume.bat` = continue current state
+- continuity is bounded by role-local windows
+- authoritative handoff artifacts outrank generic recent reports
 
 ## Included
-- `index.md` (agent-facing initialization manual)
+- `index.md`
 - `skills/subphd-run-disclosure/`
 - `skills/subphd-program-refinement/`
 - `person_program.md`
 - `agent_program.md`
-- `research_agent.toml` (ships with empty SSH defaults)
-- `start.bat` (fresh start)
-- `resume.bat` (resume current state)
-- `.subphd/` fresh runtime state
-- `roles/reader/`
-- `roles/runner/`
+- `research_agent.toml`
+- `start.bat` / `resume.bat`
+- `.subphd/`
+- `roles/`
 - `scripts/`
-- lightweight `research/` placeholders for log files referenced by config
 
 ## Not included
-- project-specific research code
-- old runtime state/history from the source project
-- old reports/prompts/commands/synced results
-- project-specific experiment artifacts
-
-## Typical migration steps
-1. Copy or unzip this starter into the new repo.
-2. Let the agent read `index.md`, deploy the two repo-shipped sub-PHD skills, and initialize the starter.
-3. Use `subphd-run-disclosure` when you want Codex to explain the current run window and project progress.
-4. Use `subphd-program-refinement` when you want Codex to improve or rewrite `person_program.md`.
-5. Add new project-specific code under `research/` if needed.
-6. Start with:
-   - `start.bat` for a new task
-   - `resume.bat` to continue existing state
+- your project-specific research code
+- your old runtime history
+- your private SSH credentials
 
 ## Notes
-- `index.md` is the intended first document for agent-guided setup.
-- SSH support remains available, but the repository no longer ships with live SSH values.
-- After initialization, the normal user-owned surface is `person_program.md` plus code under `research/`.
-- The recommended way to understand current project work is to use `subphd-run-disclosure`.
-- The recommended way to revise `person_program.md` is to use `subphd-program-refinement`.
-- `start.bat` resets `.subphd/state/*` before launching.
-- `resume.bat` reuses current `.subphd/state/*`.
-- The canonical runtime root is `.subphd/`.
-- Continuity uses role-local windows with a short resume budget rather than unbounded same-chat history.
-- The authoritative handoff under the reports root is the first continuity source before generic recent reports.
+- SSH support is available, but the repo does not ship with your live credentials.
+- The recommended way to understand project work is `subphd-run-disclosure`.
+- The recommended way to revise `person_program.md` is `subphd-program-refinement`.

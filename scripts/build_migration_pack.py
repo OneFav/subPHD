@@ -264,46 +264,46 @@ python scripts/research_dashboard.py --workdir .
 
 
 def render_pack_readme() -> str:
-    return """# sub-PHD Migration Starter
+    return """# sub-PHD
 
-This package contains the minimal reusable sub-PHD runtime framework for moving into a new project.
+> An AI grad student for your PhD: you assign research, it does the work.
+
+## Best install method
+Give Codex this exact instruction:
+
+```text
+Read https://github.com/OneFav/subPHD/blob/main/index.md and install the project locally.
+```
+
+That `index.md` file is the agent-facing setup contract. It tells Codex to deploy the shipped skills, initialize the starter, and validate the local runtime.
 
 ## Included
-- `index.md` (agent-facing initialization manual)
+- `index.md`
 - `skills/subphd-run-disclosure/`
 - `skills/subphd-program-refinement/`
 - `person_program.md`
 - `agent_program.md`
-- `research_agent.toml` (SSH/remote connection preserved)
-- `start.bat` (fresh start)
-- `resume.bat` (resume current state)
-- `.subphd/` fresh runtime state
-- `roles/reader/`
-- `roles/runner/`
+- `research_agent.toml`
+- `start.bat`
+- `resume.bat`
+- `.subphd/`
+- `roles/`
 - `scripts/`
 - lightweight `research/` placeholders for log files referenced by config
 
-## Not included
-- project-specific research code
-- old runtime state/history from the source project
-- old reports/prompts/commands/synced results
-- benchmark-specific artifacts
+## Recommended usage
+- Use `subphd-run-disclosure` to understand what the current run window is doing and how complete it is versus `person_program.md`.
+- Use `subphd-program-refinement` when you want Codex to improve or rewrite `person_program.md`.
 
-## Typical migration steps
+## Quick start
 1. Copy or unzip this starter into the new repo.
-2. Let the agent read `index.md`, deploy the two repo-shipped sub-PHD skills, and initialize the starter.
-3. Use `subphd-run-disclosure` when you want Codex to explain the current run window and project progress.
-4. Use `subphd-program-refinement` when you want Codex to improve or rewrite `person_program.md`.
-5. Keep or update the remote SSH settings in `research_agent.toml`.
-6. Add new project-specific code under `research/` if needed.
-7. Start with:
+2. Let Codex read `index.md`, deploy the two shipped sub-PHD skills, and install the project locally.
+3. Edit `person_program.md`.
+4. Start with:
    - `start.bat` for a new task
    - `resume.bat` to continue existing state
 
 ## Notes
-- `index.md` is the intended first document for agent-guided setup.
-- The recommended way to understand current project work is to use `subphd-run-disclosure`.
-- The recommended way to revise `person_program.md` is to use `subphd-program-refinement`.
 - `start.bat` resets `.subphd/state/*` before launching.
 - `resume.bat` reuses current `.subphd/state/*`.
 - The canonical runtime root is `.subphd/`.
@@ -313,41 +313,49 @@ This package contains the minimal reusable sub-PHD runtime framework for moving 
 
 
 def render_pack_readme_zh() -> str:
-    return """# sub-PHD 迁移启动包
+    return """# sub-PHD
 
-这个包是可迁移到新项目的最小 sub-PHD 运行时框架。
+> ????? AI ????????????????????
 
-## 已包含
+## ????????????
+?????????? Codex?
+
+```text
+?? https://github.com/OneFav/subPHD/blob/main/index.md ????????
+```
+
+?? `index.md` ??? Codex ?????????????????????? skill???? starter?????????
+
+## ???
+- `index.md`
+- `skills/subphd-run-disclosure/`
+- `skills/subphd-program-refinement/`
 - `person_program.md`
 - `agent_program.md`
-- `research_agent.toml`（保留开发机 SSH / 远程连接参数）
-- `start.bat`（新任务启动）
-- `resume.bat`（续跑当前状态）
-- `.subphd/` 新初始化状态
-- `roles/reader/`
-- `roles/runner/`
+- `research_agent.toml`
+- `start.bat`
+- `resume.bat`
+- `.subphd/`
+- `roles/`
 - `scripts/`
-- `research/` 下极简占位日志文件
+- `research/` ??????????
 
-## 不包含
-- 当前项目的研究代码
-- 当前项目旧的运行状态和历史
-- 旧 reports / prompts / commands / synced results
-- benchmark 专属产物
+## ????
+- ? `subphd-run-disclosure` ??????????? run ????????? `person_program.md` ?????
+- ? `subphd-program-refinement` ????? `person_program.md`?
 
-## 迁移到新项目时通常怎么做
-1. 把这个启动包复制或解压到新项目里。
-2. 改写 `person_program.md`。
-3. 按需保留或修改 `research_agent.toml` 里的远程 SSH 参数。
-4. 如果需要，在 `research/` 下加入新项目自己的代码。
-5. 启动时：
-   - 新任务用 `start.bat`
-   - 续跑用 `resume.bat`
+## ????
+1. ??? starter ????????????
+2. ? Codex ?? `index.md`??????? skill??????????
+3. ?? `person_program.md`?
+4. ? `start.bat` ? `resume.bat` ???
 
-## 说明
-- `start.bat` 会先重置 `.subphd/state/*`。
-- `resume.bat` 会复用当前 `.subphd/state/*`。
-- 当前 canonical runtime 根目录是 `.subphd/`。
+## ??
+- `start.bat` ???? `.subphd/state/*`?
+- `resume.bat` ????? `.subphd/state/*`?
+- ?? canonical runtime ???? `.subphd/`?
+- continuity ? role-local window ???????????????
+- authoritative handoff ? generic recent reports ??????
 """
 
 
@@ -385,8 +393,6 @@ def build_migration_pack(root: Path, output_dir: Path) -> tuple[Path, Path]:
     atomic_write_text(pack_root / "agent_program.md", DEFAULT_AGENT_PROGRAM)
     atomic_write_text(pack_root / "README.md", render_pack_readme())
     atomic_write_text(pack_root / "README.zh-CN.md", render_pack_readme_zh())
-    atomic_write_text(pack_root / "README-migrate.md", render_migration_readme())
-
     pack_config = load_project_config(pack_root)
     paths = resolve_artifact_paths(pack_root, pack_config)
 

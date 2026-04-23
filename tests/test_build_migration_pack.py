@@ -12,11 +12,15 @@ from scripts.research_loop_contract import load_run_state, read_json, read_valid
 class BuildMigrationPackTests(unittest.TestCase):
     def test_repo_docs_point_to_subphd_skills_for_understanding_and_program_edits(self) -> None:
         readme = Path("README.md").read_text(encoding="utf-8").lower()
-        migrate = Path("README-migrate.md").read_text(encoding="utf-8").lower()
+        readme_zh = Path("README.zh-CN.md").read_text(encoding="utf-8").lower()
         index = Path("index.md").read_text(encoding="utf-8").lower()
-        for text in (readme, migrate, index):
+        for text in (readme, readme_zh, index):
             self.assertIn("subphd-run-disclosure", text)
             self.assertIn("subphd-program-refinement", text)
+        self.assertIn("https://github.com/onefav/subphd/blob/main/index.md", readme)
+        self.assertIn("https://github.com/onefav/subphd/blob/main/index.md", readme_zh)
+        self.assertIn("install the project locally", readme)
+        self.assertIn("安装项目到本地", readme_zh)
 
     def test_build_migration_pack_creates_fresh_template_with_preserved_ssh_config(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -97,9 +101,9 @@ gpu_count = 4
             self.assertTrue((pack_root / "roles" / "runner" / "skills" / "monitor-experiment" / "SKILL.md").exists())
             self.assertTrue((pack_root / "roles" / "runner" / "skills" / "training-check" / "SKILL.md").exists())
             self.assertFalse((pack_root / "workspaces").exists())
-            self.assertTrue((pack_root / "README-migrate.md").exists())
             self.assertTrue((pack_root / "README.md").exists())
             self.assertTrue((pack_root / "README.zh-CN.md").exists())
+            self.assertFalse((pack_root / "README-migrate.md").exists())
             self.assertTrue((pack_root / "start.bat").exists())
             self.assertTrue((pack_root / "resume.bat").exists())
             self.assertTrue((pack_root / "index.md").exists())
@@ -107,14 +111,15 @@ gpu_count = 4
             self.assertTrue((pack_root / "skills" / "subphd-program-refinement" / "SKILL.md").exists())
             self.assertIn('set "HOURS=1"', (pack_root / "start.bat").read_text(encoding="utf-8"))
             self.assertIn('set "HOURS=1"', (pack_root / "resume.bat").read_text(encoding="utf-8"))
-            migrate_readme = (pack_root / "README-migrate.md").read_text(encoding="utf-8")
-            self.assertIn("role-local", migrate_readme.lower())
-            self.assertIn("authoritative handoff", migrate_readme.lower())
-            self.assertIn("subphd-run-disclosure", migrate_readme.lower())
-            self.assertIn("subphd-program-refinement", migrate_readme.lower())
             readme = (pack_root / "README.md").read_text(encoding="utf-8")
             self.assertIn("subphd-run-disclosure", readme.lower())
             self.assertIn("subphd-program-refinement", readme.lower())
+            self.assertIn("https://github.com/onefav/subphd/blob/main/index.md", readme.lower())
+            self.assertIn("install the project locally", readme.lower())
+            readme_zh = (pack_root / "README.zh-CN.md").read_text(encoding="utf-8")
+            self.assertIn("subphd-run-disclosure", readme_zh.lower())
+            self.assertIn("subphd-program-refinement", readme_zh.lower())
+            self.assertIn("https://github.com/onefav/subphd/blob/main/index.md", readme_zh.lower())
             index = (pack_root / "index.md").read_text(encoding="utf-8")
             self.assertIn("subphd-run-disclosure", index.lower())
             self.assertIn("subphd-program-refinement", index.lower())
