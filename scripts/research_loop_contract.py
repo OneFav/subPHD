@@ -4,11 +4,11 @@ from __future__ import annotations
 import hashlib
 import json
 import tempfile
-import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 SCHEMA_VERSION = 1
 ROLE_VALUES = {"reader", "runner"}
@@ -35,19 +35,148 @@ DEFAULT_AGENT_PROGRAM = """# agent_program.md
 - Prefer reversible, evidence-rich experimental steps.
 
 ## Revision Suggestions
-- None yet. The runner should record concrete implementation or validation follow-ups before handoff.
+- None yet. The runner must add English paper-revision suggestions before handoff.
 """
 
-DEFAULT_ROLE_SURFACES: dict[str, dict[str, str]] = {
+DEFAULT_READER_SKILLS: dict[str, str] = {
+    "reader-handoff": """---
+name: reader-handoff
+description: Reader role helper for turning shared runtime evidence into the next bounded objective.
+---
+
+# Reader Handoff
+
+Use this project-local role skill to keep reader work concrete:
+
+- inspect the current authoritative handoff first, then current authoritative artifacts, then only consult generic reports/archive if those are insufficient
+- tighten `agent_program.md` into a runner-ready assignment
+- when the next runner turn is remote, define the compact core artifact set that should remain in `remote_result_dir`
+- instruct runner to delete non-essential process files before watch sync whenever those files do not need to come back locally
+- write `expected_output` and `why` in plain language, naming the concrete experiment, metric, file, or decision rather than vague process wording
+- prefer bounded objectives over abstract future planning
+""",
+    "experiment-plan": """---
+name: experiment-plan
+description: Turn the current sub-PHD direction into a compact claim-to-evidence run plan for the next runner turn.
+---
+
+# Experiment Plan
+
+Use when the next step is still fuzzy and runner needs a tighter execution contract.
+
+- read the current authoritative handoff first, then `person_program.md`, `agent_program.md`, `.subphd/state/run-state.json`, and only then fall back to generic recent reports/synced results if needed
+- translate the current objective into: claim, evidence needed, concrete run order, stop condition, and artifact checklist
+- keep the plan compact: one primary question, a small number of runs, and explicit success/failure criteria
+- name the exact experiment, metric, file, or decision the next run must produce
+- write the resulting bounded plan back into `agent_program.md` in language runner can execute immediately
+""",
+    "analyze-results": """---
+name: analyze-results
+description: Summarize synced experiment outputs into concrete comparisons, deltas, and anomalies for reader decisions.
+---
+
+# Analyze Results
+
+Use when new outputs arrive from runner or watch sync.
+
+- inspect the current authoritative handoff and current-window evidence first; only use generic recent reports/archive as fallback context
+- extract the primary metric, the comparison baseline, and the observed delta instead of listing raw files only
+- flag suspicious patterns clearly: missing outputs, regressions, instability, or results that do not answer the intended question
+- update `expected_output`, `why`, and the next handoff using plain language a human can scan quickly
+- prefer a short table or bullet summary over vague prose
+""",
+    "result-to-claim": """---
+name: result-to-claim
+description: Judge what the latest results actually support before reader authorizes the next run.
+---
+
+# Result to Claim
+
+Use after a meaningful run completes and before expanding scope.
+
+- compare the intended claim in `agent_program.md` with the evidence that actually came back
+- decide explicitly: supported, partially supported, not supported, or still unclear
+- name what evidence is missing if the answer is still unclear
+- turn the judgment into the next bounded action: confirm, repair, ablate, or pivot
+- write the judgment in plain language that names the exact experiment, metric, file, or decision
+""",
+}
+
+DEFAULT_RUNNER_SKILLS: dict[str, str] = {
+    "runner-implementation": """---
+name: runner-implementation
+description: Runner role helper for implementing and validating bounded changes in the repo working tree.
+---
+
+# Runner Implementation
+
+Use this project-local role skill to keep runner work grounded:
+
+- implement the current bounded assignment in the repo working tree
+- validate with the smallest meaningful checks before handoff
+- record what changed and what evidence was gathered
+- before the remote run ends, prune `remote_result_dir` so only the compact core artifacts remain for watch sync
+- delete unnecessary intermediate/process files by default
+- keep only the final decision/metrics/summary/manifest style artifacts unless the assignment explicitly requires more
+- if a large artifact might matter later, leave a small retained note about it rather than keeping the bulky file in `remote_result_dir`
+- for `expected_output` and `why`, write short plain-language lines that name the exact experiment, metric, file, or decision; avoid vague process-speak
+""",
+    "experiment-bridge": """---
+name: experiment-bridge
+description: Turn a bounded reader assignment into code changes, a remote run, and a compact evidence package.
+---
+
+# Experiment Bridge
+
+Use when reader has already narrowed the task and runner must execute it.
+
+- implement only the missing code, config, or script changes required for the assigned run
+- launch the smallest remote experiment that answers the current question before widening scope
+- keep the run tied to a clear stop condition and expected artifact list from `agent_program.md`
+- collect a compact evidence bundle: decision, core metrics, summary, manifest, and any explicitly requested files
+- before exit, prune `remote_result_dir` so watch sync only brings back what reader actually needs
+""",
+    "monitor-experiment": """---
+name: monitor-experiment
+description: Check remote run progress and collect only the compact evidence needed for sub-PHD decisions.
+---
+
+# Monitor Experiment
+
+Use while a remote run is active or when watch is waiting on completion.
+
+- check whether the remote process is still alive, progressing, stalled, or failed
+- report the current state in plain language: what is running, what finished, and what is blocked
+- prefer concise progress indicators such as the latest completed step, elapsed time, and newest result file
+- if the remote run already produced enough evidence, say so explicitly instead of waiting for every optional artifact
+- keep notes compatible with `.subphd/state/research_watch_snapshot.json` and the dashboard timeline
+""",
+    "training-check": """---
+name: training-check
+description: Detect obvious run-quality failures early so runner does not waste GPU time.
+---
+
+# Training Check
+
+Use during longer remote runs when training quality is uncertain.
+
+- inspect the latest metrics/logs for failure signals such as NaN, divergence, flatlined progress, or idle execution
+- report the exact metric or log line that indicates the problem
+- if the run is clearly broken, stop and hand back a compact failure summary rather than burning more time
+- if the run looks healthy, say which metric trend supports continuing
+- keep the summary short, concrete, and understandable to a human reading sub-PHD
+""",
+}
+
+
+DEFAULT_ROLE_SURFACES: dict[str, dict[str, Any]] = {
     "reader": {
-        "agents": """# Reader Role Surface\n\nYou are the project-local READER role.\n\n## Purpose\n- Analyze the current state of the repo-local runtime and control artifacts.\n- Refine `agent_program.md` and the next bounded objective.\n- Do not perform broad speculative replanning unless the current evidence forces it.\n\n## Must preserve\n- Shared `person_program.md` + `agent_program.md` control model\n- Direct repo-root ownership for code and artifacts (no separate workspace directory)\n- Current runtime contract and assignment boundary\n- When handing off a remote run, specify the compact core artifact set that should survive in `remote_result_dir`, so runner can delete non-essential process files before watch sync\n- When you set or revise `expected_output` and `why`, write them in plain language and name the exact experiment, metric, file, or decision the human should understand\n""",
-        "skill_name": "reader-handoff",
-        "skill": """---\nname: reader-handoff\ndescription: Reader role helper for clarifying next bounded objectives from repo-local runtime evidence.\n---\n\n# Reader Handoff Skill\n\nFocus on turning current runtime evidence into the next bounded assignment for runner.\n- Prefer reading runtime state, reports, observability, and repo-local artifacts first.\n- Update `agent_program.md` when the next implementation lane needs a tighter contract.\n- When the next runner turn is remote, define the compact core artifact set that should remain in `remote_result_dir` and let runner delete non-essential process files before watch sync.\n- Write `expected_output` and `why` in plain language, naming the concrete experiment, metric, file, or decision rather than vague process wording.\n- End with a clear handoff rather than open-ended brainstorming.\n""",
+        "agents": """# Reader Role Surface\n\nYou are the project-local READER role.\n\n## Purpose\n- Analyze the current state of the repo-local runtime and control artifacts.\n- Refine `agent_program.md` and the next bounded objective.\n- Do not perform benchmark redesign or broad speculative replanning unless the current evidence forces it.\n\n## Must preserve\n- Shared `person_program.md` + `agent_program.md` control model\n- Direct repo-root ownership for code and artifacts (no separate workspace directory)\n- Current benchmark semantics and runtime contract\n- Treat the current authoritative handoff as the first continuity source; use generic recent reports/archive only as fallback context\n- When handing off a remote run, specify the compact core artifact set that should survive in `remote_result_dir`, so runner can delete non-essential process files before watch sync\n- When you set or revise `expected_output` and `why`, write them in plain language and name the exact experiment, metric, file, or decision the human should understand\n""",
+        "skills": DEFAULT_READER_SKILLS,
     },
     "runner": {
-        "agents": """# Runner Role Surface\n\nYou are the project-local RUNNER role.\n\n## Purpose\n- Implement and verify bounded changes in the repo working tree.\n- Keep work focused on the current assignment and runtime contract.\n- Prefer real implementation + validation over further strategic churn.\n\n## Must preserve\n- Shared `person_program.md` + `agent_program.md` control model\n- Direct repo-root ownership for code and artifacts (no separate workspace directory)\n- Current runtime contract and assignment boundary\n- Before ending a remote run, clean `remote_result_dir` so watch sync only sees the compact core artifacts that really need to come back locally\n- Delete bulky intermediate/process files by default; only keep the final core result set such as decisions, metrics, summaries, manifests, and other explicitly needed evidence\n- If a large artifact may matter later, prefer leaving a compact summary/manifest note that points to it rather than retaining the bulky file in `remote_result_dir`\n- When writing dashboard fields such as `expected_output` and `why`, use plain language, name the exact experiment/check/artifact/metric involved, and avoid vague filler like 'the process requires this'\n""",
-        "skill_name": "runner-implementation",
-        "skill": """---\nname: runner-implementation\ndescription: Runner role helper for implementing and validating bounded changes in the repo working tree.\n---\n\n# Runner Implementation Skill\n\nUse this role-local skill to keep execution concrete.\n- Implement the current bounded assignment directly in the repo working tree.\n- Validate with the smallest meaningful checks before handoff.\n- Before the remote run ends, prune `remote_result_dir` so only the compact core artifacts remain for watch sync.\n- Delete unnecessary intermediate/process files by default.\n- Keep only the final decision/metrics/summary/manifest style artifacts unless the assignment explicitly requires more.\n- If a large artifact might matter later, leave a small retained note about it rather than keeping the bulky file in `remote_result_dir`.\n- For `expected_output` and `why`, write short plain-language lines that name the exact experiment, metric, file, or decision; avoid vague process-speak.\n- Do not silently widen scope into open-ended redesign or exploration.\n""",
+        "agents": """# Runner Role Surface\n\nYou are the project-local RUNNER role.\n\n## Purpose\n- Implement and verify bounded changes in the repo working tree.\n- Keep work focused on the current assignment and runtime contract.\n- Prefer real implementation + validation over further strategic churn.\n\n## Must preserve\n- Shared `person_program.md` + `agent_program.md` control model\n- Direct repo-root ownership for code and artifacts (no separate workspace directory)\n- Current benchmark semantics and runtime contract\n- Before ending a remote run, clean `remote_result_dir` so watch sync only sees the compact core artifacts that really need to come back locally\n- Delete bulky intermediate/process files by default; only keep the final core result set such as decisions, metrics, summaries, manifests, and other explicitly needed evidence\n- If a large artifact may matter later, prefer leaving a compact summary/manifest note that points to it rather than retaining the bulky file in `remote_result_dir`\n- When writing dashboard fields such as `expected_output` and `why`, use plain language, name the exact experiment/check/artifact/metric involved, and avoid vague filler like 'the process requires this'\n""",
+        "skills": DEFAULT_RUNNER_SKILLS,
     },
 }
 
@@ -92,6 +221,15 @@ def text_sha256(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
+def new_big_round_id() -> str:
+    return f"big-round-{uuid4().hex[:12]}"
+
+
+def new_role_window_id(role: str) -> str:
+    safe_role = require_enum(role, ROLE_VALUES, "role")
+    return f"{safe_role}-window-{uuid4().hex[:12]}"
+
+
 def compact_text_summary(label: str, path: Path, text: str, max_excerpt: int = 120) -> dict[str, Any]:
     return {
         "label": label,
@@ -113,19 +251,7 @@ def atomic_write_text(path: Path, content: str) -> None:
     with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False, dir=str(path.parent)) as tmp:
         tmp.write(content)
         tmp_path = Path(tmp.name)
-    last_error: PermissionError | None = None
-    for attempt in range(6):
-        try:
-            tmp_path.replace(path)
-            return
-        except PermissionError as exc:
-            last_error = exc
-            if attempt == 5:
-                break
-            # Windows can briefly lock files that were just read or replaced.
-            time.sleep(0.05 * (attempt + 1))
-    if last_error is not None:
-        raise last_error
+    tmp_path.replace(path)
 
 
 def atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
@@ -282,6 +408,14 @@ def default_loop_state(config: dict[str, Any] | None = None) -> dict[str, Any]:
         "last_prompt_role": None,
         "last_prompt_path": None,
         "prompt_contract_hash": None,
+        "big_round_id": new_big_round_id(),
+        "window_role": "reader",
+        "role_window_id": new_role_window_id("reader"),
+        "resume_budget": 3,
+        "resume_count": 0,
+        "last_authoritative_handoff_path": None,
+        "last_rollover_at": None,
+        "last_rollover_reason": None,
         "updated_at": now_utc_iso(),
     }
 
@@ -350,13 +484,67 @@ def event_payload(*, event_type: str, source: str, reason: str, assignment_id: s
     return payload
 
 
-def compute_prompt_contract_hash(person_program: str, agent_program: str, role: str, assignment_payload: dict[str, Any] | None) -> str:
+def normalize_authoritative_handoff_payload(payload: dict[str, Any] | None) -> dict[str, Any] | str:
+    if not payload:
+        return "NO_AUTHORITATIVE_HANDOFF"
+    normalized = dict(payload)
+    normalized.pop("prompt_contract_basis_sha256", None)
+    return normalized
+
+
+def authoritative_handoffs_root(paths: ArtifactPaths) -> Path:
+    return paths.reports_root / "authoritative-handoffs"
+
+
+def build_authoritative_handoff_path(paths: ArtifactPaths, loop_state: dict[str, Any]) -> Path:
+    big_round_id = str(loop_state.get("big_round_id") or new_big_round_id())
+    window_role = require_enum(str(loop_state.get("window_role") or "reader"), ROLE_VALUES, "window_role")
+    role_window_id = str(loop_state.get("role_window_id") or new_role_window_id(window_role))
+    return authoritative_handoffs_root(paths) / f"authoritative-handoff-{big_round_id}-{window_role}-{role_window_id}.json"
+
+
+def load_authoritative_handoff_payload(path: Path | None, *, expected_big_round_id: str | None = None, expected_window_role: str | None = None) -> dict[str, Any] | None:
+    if path is None or not path.exists():
+        return None
+    payload = read_json(path)
+    required = [
+        "schema_version",
+        "big_round_id",
+        "role_window_id",
+        "window_role",
+        "source_role",
+        "generated_at",
+        "current_objective",
+        "current_conclusions",
+        "next_step_recommendation",
+        "authoritative_artifacts",
+        "key_evidence",
+        "failed_or_do_not_repeat",
+        "open_uncertainties",
+        "person_program_reader_judgment",
+        "agent_program_runner_judgment",
+        "planning_guidance",
+        "handoff_summary_text",
+        "prompt_contract_basis_sha256",
+    ]
+    for field in required:
+        if field not in payload:
+            raise ValueError(f"authoritative handoff missing {field}")
+    if expected_big_round_id and payload.get("big_round_id") != expected_big_round_id:
+        raise ValueError("authoritative handoff big_round_id mismatch")
+    if expected_window_role and payload.get("window_role") != expected_window_role:
+        raise ValueError("authoritative handoff window_role mismatch")
+    return payload
+
+
+def compute_prompt_contract_hash(person_program: str, agent_program: str, role: str, assignment_payload: dict[str, Any] | None, authoritative_handoff: dict[str, Any] | None = None) -> str:
     require_enum(role, ROLE_VALUES, "role")
     basis = {
         "person_program": person_program,
         "agent_program": agent_program,
         "role": role,
-        "assignment": assignment_payload or {},
+        "assignment": build_canonical_contract_assignment(assignment_payload or {}, role),
+        "authoritative_handoff": normalize_authoritative_handoff_payload(authoritative_handoff),
     }
     return hashlib.sha256(stable_json(basis).encode("utf-8")).hexdigest()
 
@@ -379,6 +567,31 @@ def _matched_prompt_payload(run_state: dict[str, Any], role: str) -> dict[str, A
     return None
 
 
+def backfill_loop_state(data: dict[str, Any]) -> tuple[dict[str, Any], bool]:
+    payload = dict(data)
+    changed = False
+    if "big_round_id" not in payload or not isinstance(payload.get("big_round_id"), str) or not payload.get("big_round_id"):
+        payload["big_round_id"] = new_big_round_id()
+        changed = True
+    if "window_role" not in payload or payload.get("window_role") not in ROLE_VALUES:
+        payload["window_role"] = payload.get("last_prompt_role") if payload.get("last_prompt_role") in ROLE_VALUES else "reader"
+        changed = True
+    if "role_window_id" not in payload or not isinstance(payload.get("role_window_id"), str) or not payload.get("role_window_id"):
+        payload["role_window_id"] = new_role_window_id(str(payload["window_role"]))
+        changed = True
+    if "resume_budget" not in payload or not isinstance(payload.get("resume_budget"), int) or int(payload.get("resume_budget", 0)) <= 0:
+        payload["resume_budget"] = 3
+        changed = True
+    if "resume_count" not in payload or not isinstance(payload.get("resume_count"), int) or int(payload.get("resume_count", 0)) < 0:
+        payload["resume_count"] = 0
+        changed = True
+    for field in ["last_authoritative_handoff_path", "last_rollover_at", "last_rollover_reason"]:
+        if field not in payload:
+            payload[field] = None
+            changed = True
+    return payload, changed
+
+
 def resolve_human_prompt_for_role(run_state: dict[str, Any], role: str) -> dict[str, Any] | None:
     require_enum(role, ROLE_VALUES, "role")
     return _matched_prompt_payload(run_state, role)
@@ -396,18 +609,47 @@ def sanitize_run_state_for_role(run_state: dict[str, Any], role: str) -> dict[st
     return sanitized
 
 
+def build_prompt_contract_assignment(run_state: dict[str, Any], role: str) -> dict[str, Any]:
+    sanitized = sanitize_run_state_for_role(run_state, role)
+    sanitized.pop("updated_at", None)
+    sanitized.pop("agent_program_ref", None)
+    sanitized.pop("observability_segment_id", None)
+    sanitized.pop("observability_sidecar_path", None)
+    last_applied = sanitized.get("last_applied_human_prompt")
+    if isinstance(last_applied, dict):
+        stripped = dict(last_applied)
+        stripped.pop("applied_at", None)
+        sanitized["last_applied_human_prompt"] = stripped
+    return sanitized
+
+
+def build_canonical_contract_assignment(assignment_payload: dict[str, Any], role: str) -> dict[str, Any]:
+    canonical = dict(assignment_payload)
+    canonical.pop("updated_at", None)
+    canonical.pop("agent_program_ref", None)
+    canonical.pop("observability_segment_id", None)
+    canonical.pop("observability_sidecar_path", None)
+    pending = canonical.get("pending_human_prompt")
+    if isinstance(pending, dict):
+        stripped = dict(pending)
+        stripped.pop("applied_at", None)
+        canonical["pending_human_prompt"] = stripped
+    return canonical
+
+
 def build_prompt_render_state(run_state: dict[str, Any], role: str) -> tuple[dict[str, Any], dict[str, Any] | None]:
     sanitized = sanitize_run_state_for_role(run_state, role)
     return sanitized, sanitized.get("applied_human_prompt")
 
 
-def compute_rendered_prompt_contract_hash(person_program: str, agent_program: str, role: str, run_state: dict[str, Any] | None) -> str:
+def compute_rendered_prompt_contract_hash(person_program: str, agent_program: str, role: str, run_state: dict[str, Any] | None, authoritative_handoff: dict[str, Any] | None = None) -> str:
     require_enum(role, ROLE_VALUES, "role")
     basis = {
         "person_program": person_program,
         "agent_program": agent_program,
         "role": role,
-        "assignment": sanitize_run_state_for_role(run_state or {}, role),
+        "assignment": build_prompt_contract_assignment(run_state or {}, role),
+        "authoritative_handoff": normalize_authoritative_handoff_payload(authoritative_handoff),
     }
     return hashlib.sha256(stable_json(basis).encode("utf-8")).hexdigest()
 
@@ -415,6 +657,7 @@ def compute_rendered_prompt_contract_hash(person_program: str, agent_program: st
 def validate_loop_state(data: dict[str, Any]) -> dict[str, Any]:
     if data.get("schema_version") != SCHEMA_VERSION:
         raise ValueError("unsupported loop state schema_version")
+    data, _ = backfill_loop_state(data)
     for field in ["next_agent", "remaining_global_budget", "last_transition_reason", "last_resume_mode", "updated_at"]:
         if field not in data:
             raise ValueError(f"missing {field}")
@@ -425,6 +668,18 @@ def validate_loop_state(data: dict[str, Any]) -> dict[str, Any]:
         require_enum(last_watch, WATCH_STATUS_VALUES, "last_watch_status")
     if not isinstance(data["remaining_global_budget"], dict):
         raise ValueError("missing remaining_global_budget")
+    require_enum(data.get("window_role"), ROLE_VALUES, "window_role")
+    if not isinstance(data.get("big_round_id"), str) or not data.get("big_round_id"):
+        raise ValueError("big_round_id must be a non-empty string")
+    if not isinstance(data.get("role_window_id"), str) or not data.get("role_window_id"):
+        raise ValueError("role_window_id must be a non-empty string")
+    if not isinstance(data.get("resume_budget"), int) or int(data.get("resume_budget", 0)) <= 0:
+        raise ValueError("resume_budget must be a positive integer")
+    if not isinstance(data.get("resume_count"), int) or int(data.get("resume_count", 0)) < 0:
+        raise ValueError("resume_count must be a non-negative integer")
+    handoff_path = data.get("last_authoritative_handoff_path")
+    if handoff_path is not None and (not isinstance(handoff_path, str) or not handoff_path.strip()):
+        raise ValueError("last_authoritative_handoff_path must be a non-empty string or null")
     return data
 
 
@@ -634,15 +889,19 @@ def _default_agent_program_text() -> str:
 def ensure_role_surfaces(paths: ArtifactPaths) -> None:
     for role_name, surface in DEFAULT_ROLE_SURFACES.items():
         role_root = paths.reader_role_root if role_name == "reader" else paths.runner_role_root
-        skills_root = role_root / "skills" / surface["skill_name"]
         role_root.mkdir(parents=True, exist_ok=True)
-        skills_root.mkdir(parents=True, exist_ok=True)
         agent_path = role_root / "AGENTS.md"
-        skill_path = skills_root / "SKILL.md"
         if not agent_path.exists():
             atomic_write_text(agent_path, surface["agents"])
-        if not skill_path.exists():
-            atomic_write_text(skill_path, surface["skill"])
+        skills = surface.get("skills")
+        if skills is None and "skill_name" in surface and "skill" in surface:
+            skills = {surface["skill_name"]: surface["skill"]}
+        for skill_name, skill_body in (skills or {}).items():
+            skill_root = role_root / "skills" / str(skill_name)
+            skill_root.mkdir(parents=True, exist_ok=True)
+            skill_path = skill_root / "SKILL.md"
+            if not skill_path.exists():
+                atomic_write_text(skill_path, skill_body)
 
 
 def export_omx_compat_artifacts(paths: ArtifactPaths, config: dict[str, Any] | None = None) -> None:
@@ -754,6 +1013,11 @@ def bootstrap_state_artifacts(root: Path, config: dict[str, Any] | None = None) 
     import_legacy_omx_state(paths, config)
     if not paths.loop_state.exists():
         atomic_write_json(paths.loop_state, default_loop_state(config))
+    else:
+        raw_loop_state = read_json(paths.loop_state)
+        migrated_loop_state = validate_loop_state(raw_loop_state)
+        if migrated_loop_state != raw_loop_state:
+            atomic_write_json(paths.loop_state, migrated_loop_state)
     if not paths.watch_snapshot.exists():
         atomic_write_json(paths.watch_snapshot, default_watch_snapshot())
     if not paths.watch_events.exists():
@@ -770,6 +1034,12 @@ def bootstrap_state_artifacts(root: Path, config: dict[str, Any] | None = None) 
 def reset_runtime_state(paths: ArtifactPaths, config: dict[str, Any] | None = None, *, reason: str = "fresh_task_start") -> dict[str, Any]:
     loop_state = default_loop_state(config)
     loop_state["last_transition_reason"] = reason
+    loop_state["window_role"] = "reader"
+    loop_state["role_window_id"] = new_role_window_id("reader")
+    loop_state["resume_count"] = 0
+    loop_state["last_authoritative_handoff_path"] = None
+    loop_state["last_rollover_at"] = None
+    loop_state["last_rollover_reason"] = None
     loop_state["updated_at"] = now_utc_iso()
     watch_snapshot = default_watch_snapshot()
     watch_snapshot["updated_at"] = now_utc_iso()

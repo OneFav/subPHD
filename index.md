@@ -17,11 +17,25 @@ This file is the first entrypoint for an agent that is helping a user initialize
 
 ## Initialization Flow
 1. Read this file before any other onboarding action.
-2. Inspect the current repository state.
-3. Ask the user the minimum setup questions needed to initialize the starter.
-4. Fill framework-owned configuration files.
-5. Run the validation steps below.
-6. Report the final startup commands back to the user.
+2. Make the two repo-shipped sub-PHD skills available to Codex before continuing:
+   - `skills/subphd-run-disclosure/`
+   - `skills/subphd-program-refinement/`
+   Deploy them into the active Codex skills environment by copying, linking, or otherwise installing them in the user's Codex skill path.
+3. Inspect the current repository state.
+4. Ask the user the minimum setup questions needed to initialize the starter.
+5. Fill framework-owned configuration files.
+6. Run the validation steps below.
+7. Report the final startup commands back to the user.
+
+## Required sub-PHD skills
+This starter now ships two companion skills that should be available to Codex during normal use:
+
+- `subphd-run-disclosure`
+  - Use this to understand what the current sub-PHD run window is doing, what evidence exists, and how complete the run is versus `person_program.md`.
+- `subphd-program-refinement`
+  - Use this to refine or rewrite `person_program.md` when the current mission becomes stale, too narrow, or misaligned with the newest evidence.
+
+If those skills are not yet available in the active Codex environment, deploy them before setup finishes.
 
 ## Questions To Ask The User
 - What is the project trying to do?
@@ -90,7 +104,8 @@ resume.bat
 ## Steady-State User Workflow
 After initialization, the intended user workflow is:
 1. put project code under `research/`
-2. edit `person_program.md`
+2. use `subphd-program-refinement` when you want Codex to improve or rewrite `person_program.md`
+3. use `subphd-run-disclosure` when you want Codex to explain what the current run is doing and what evidence it has produced
 3. start the loop with the command-line or `.bat` entrypoint
 
 ## Non-Goals

@@ -11,6 +11,7 @@ if str(ROOT_DIR) not in sys.path:
 
 import argparse
 import json
+import re
 import shlex
 import shutil
 import subprocess
@@ -24,10 +25,13 @@ except ImportError:  # pragma: no cover
 
 from scripts.research_loop_contract import (
     ROLE_VALUES,
+    build_prompt_contract_assignment,
     RESUME_MODE_VALUES,
     append_ai_worklog_entry,
     compact_text_summary,
     compute_rendered_prompt_contract_hash,
+    load_authoritative_handoff_payload,
+    normalize_authoritative_handoff_payload,
     render_compact_summary,
     require_runtime_artifacts,
     compute_prompt_contract_hash,
@@ -53,6 +57,24 @@ DEFAULT_ROLE_NOTES = {
         "Smoke and formal experiments remain remote-only. "
         "You may autonomously iterate only within the current assignment bounds."
     ),
+}
+
+BASE_ROLE_SKILLS = {
+    "reader": "reader-handoff",
+    "runner": "runner-implementation",
+}
+
+ROLE_SKILL_KEYWORDS: dict[str, dict[str, tuple[str, ...]]] = {
+    "reader": {
+        "experiment-plan": ("plan", "protocol", "run order", "roadmap", "ablation", "next experiment"),
+        "analyze-results": ("analyze", "analysis", "compare", "comparison", "result", "metric", "delta", "table", "summary"),
+        "result-to-claim": ("claim", "claims", "supported", "support", "evidence", "verdict", "judge", "decision"),
+    },
+    "runner": {
+        "experiment-bridge": ("implement", "launch", "run", "remote", "deploy", "experiment", "calibration"),
+        "monitor-experiment": ("watch", "monitor", "progress", "stalled", "heartbeat", "alive", "poll"),
+        "training-check": ("training", "loss", "wandb", "nan", "diverge", "divergence", "flatline", "health"),
+    },
 }
 
 def load_project_config(root: Path) -> dict[str, Any]:
@@ -109,14 +131,61 @@ def ensure_runner_remote_requirements(config: dict[str, Any]) -> None:
         raise ValueError(f"runner mode requires remote config keys: {', '.join(missing)}")
 
 
-def load_role_surface(role_root: Path) -> str:
+def parse_role_skill_hints(agent_program_text: str, role: str) -> set[str]:
+    if not agent_program_text:
+        return set()
+    pattern = re.compile(
+        rf"(?im)^(?:active\s+skills|{re.escape(role)}\s+skills|active\s+{re.escape(role)}\s+skills)\s*:\s*(.+)$"
+    )
+    matches = pattern.findall(agent_program_text)
+    selected: set[str] = set()
+    for match in matches:
+        for token in re.split(r"[,\|/]+", match):
+            normalized = token.strip().lower()
+            if normalized:
+                selected.add(normalized)
+    return selected
+
+
+def select_role_skills(role: str, run_state: dict[str, Any], agent_program_text: str) -> list[str]:
+    selected = {BASE_ROLE_SKILLS[role]}
+    explicit = run_state.get("active_role_skills")
+    if isinstance(explicit, dict):
+        explicit = explicit.get(role)
+    if isinstance(explicit, list):
+        selected.update(str(item).strip().lower() for item in explicit if str(item).strip())
+    elif isinstance(explicit, str) and explicit.strip():
+        selected.add(explicit.strip().lower())
+    selected.update(parse_role_skill_hints(agent_program_text, role))
+
+    context_parts = [agent_program_text]
+    for key in ("current_objective", "next_action", "success_condition", "remote_status"):
+        value = run_state.get(key)
+        if isinstance(value, str):
+            context_parts.append(value)
+    pending_prompt = run_state.get("applied_human_prompt") or run_state.get("pending_human_prompt")
+    if isinstance(pending_prompt, dict):
+        prompt_text = pending_prompt.get("text")
+        if isinstance(prompt_text, str):
+            context_parts.append(prompt_text)
+    context = " ".join(context_parts).lower()
+    for skill_name, keywords in ROLE_SKILL_KEYWORDS.get(role, {}).items():
+        if any(keyword in context for keyword in keywords):
+            selected.add(skill_name)
+    return sorted(selected)
+
+
+def load_role_surface(role_root: Path, selected_skills: list[str] | None = None) -> str:
     parts: list[str] = []
     agents_path = role_root / "AGENTS.md"
     if agents_path.exists():
         parts.append(f"Role AGENTS ({agents_path}):\n{agents_path.read_text(encoding='utf-8')}")
     skills_root = role_root / "skills"
     if skills_root.exists():
+        allowed = {item.strip().lower() for item in selected_skills or [] if item and item.strip()}
         for skill_path in sorted(skills_root.glob("*/SKILL.md")):
+            if allowed and skill_path.parent.name.lower() not in allowed:
+                continue
             parts.append(f"Role skill ({skill_path}):\n{skill_path.read_text(encoding='utf-8')}")
     return "\n\n".join(parts).strip()
 
@@ -146,6 +215,7 @@ def build_role_prompt(
     report_path: str,
     supervisor_template: str,
     legacy_task: str | None = None,
+    authoritative_handoff: dict[str, Any] | None = None,
 ) -> str:
     role = role.strip().lower()
     if role not in ROLE_VALUES:
@@ -155,7 +225,8 @@ def build_role_prompt(
         paths = resolve_artifact_paths(ROOT_DIR, load_project_config(ROOT_DIR))
     legacy_block = f"\nLegacy request context:\n{legacy_task}\n" if legacy_task else ""
     role_root = paths.reader_role_root if role == "reader" else paths.runner_role_root
-    role_surface_block = load_role_surface(role_root)
+    selected_skills = select_role_skills(role, run_state, agent_program_full)
+    role_surface_block = load_role_surface(role_root, selected_skills)
     extra_role_rules = ""
     if role == "reader":
         whitelist = "\n".join(f"  - {item}" for item in build_runtime_whitelist(paths))
@@ -208,7 +279,21 @@ def build_role_prompt(
             "- If you use a technical term or a new abbreviation, explain it in ordinary words immediately.\n"
             "- Keep `expected_output` and `why` to one or two short sentences each, but make them concrete and readable.\n"
         )
-    return f"""$ralph role={role} execute the current research loop step.
+    authority_block = (
+        "\nAuthority ordering:\n"
+        "1. Current authoritative handoff artifact\n"
+        "2. Current authoritative artifacts named by that handoff\n"
+        "3. Current run state plus shared control programs\n"
+        "4. Older reports/archive are fallback-only when the higher-priority sources are insufficient\n"
+    )
+    handoff_block = ""
+    if authoritative_handoff and authoritative_handoff.get("payload"):
+        handoff_block = (
+            "\nCurrent authoritative handoff artifact:\n"
+            f"- Path: {authoritative_handoff.get('path')}\n"
+            f"- Payload: {json.dumps(authoritative_handoff.get('payload'), ensure_ascii=False, indent=2)}\n"
+        )
+    return f"""Execute the current sub-PHD loop step for role={role}.
 
 ROLE NOTE:
 {DEFAULT_ROLE_NOTES[role]}
@@ -231,12 +316,17 @@ Execution requirements:
 - Use `scripts/research_supervisor.py watch` for long-running remote monitoring rather than rediscovering active runs repeatedly.
 - Poll cadence reference: every {poll_seconds} seconds.
 - Write final role summary to: `{report_path}`.
+{authority_block}
 {extra_role_rules}
 {prompt_block}
 {observability_block}
+{handoff_block}
 
 Project-local role surface:
 {role_surface_block or '(No additional role surface files found)'}
+
+Activated role-local skills for this turn:
+- {", ".join(selected_skills)}
 
 Role launch contract:
 - role_name = `{role}`
@@ -284,6 +374,16 @@ def build_codex_command(
         cmd.extend(["resume", "--last"])
     cmd.append("-")
     return cmd
+
+
+def run_codex_command(cmd: list[str], *, cwd: Path, prompt_text: str) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        cmd,
+        cwd=cwd,
+        input=prompt_text,
+        text=True,
+        encoding="utf-8",
+    )
 
 
 def resolve_launcher_path(name: str) -> str:
@@ -369,12 +469,12 @@ def normalize_post_role_run_state(role: str, run_state: dict[str, Any]) -> dict[
     return normalized
 
 
-def prepare_prompt_contract(*, role: str, person_program_text: str, agent_program_text: str, run_state: dict[str, Any]) -> dict[str, Any]:
+def prepare_prompt_contract(*, role: str, person_program_text: str, agent_program_text: str, run_state: dict[str, Any], authoritative_handoff: dict[str, Any] | None = None) -> dict[str, Any]:
     render_state = sanitize_run_state_for_role(run_state, role)
     applied_prompt = render_state.get("applied_human_prompt")
     return {
-        "canonical_state_hash": compute_prompt_contract_hash(person_program_text, agent_program_text, role, run_state),
-        "rendered_prompt_hash": compute_rendered_prompt_contract_hash(person_program_text, agent_program_text, role, run_state),
+        "canonical_state_hash": compute_prompt_contract_hash(person_program_text, agent_program_text, role, run_state, authoritative_handoff=authoritative_handoff),
+        "rendered_prompt_hash": compute_rendered_prompt_contract_hash(person_program_text, agent_program_text, role, run_state, authoritative_handoff=authoritative_handoff),
         "render_state": render_state,
         "applied_prompt": applied_prompt,
         "applied_prompt_hash": (applied_prompt or {}).get("prompt_sha256"),
@@ -423,7 +523,22 @@ def main() -> int:
     model = args.model or config.get("default_model", "gpt-5.4")
     person_program_text = read_validated_text(paths.person_program, "person_program")
     agent_program_text = read_validated_text(paths.agent_program, "agent_program")
-    if role == "runner" and not args.dry_run:
+    authoritative_handoff = None
+    handoff_path_raw = loop_state.get("last_authoritative_handoff_path")
+    if isinstance(handoff_path_raw, str) and handoff_path_raw:
+        try:
+            handoff_payload = load_authoritative_handoff_payload(
+                Path(handoff_path_raw),
+                expected_big_round_id=loop_state.get("big_round_id"),
+            )
+            if handoff_payload:
+                authoritative_handoff = {
+                    "path": handoff_path_raw,
+                    "payload": handoff_payload,
+                }
+        except Exception:
+            authoritative_handoff = None
+    if role == "runner":
         ensure_runner_remote_requirements(config)
         if args.task:
             raise ValueError("runner mode rejects ad-hoc local task injection; use reader-produced artifacts only")
@@ -432,6 +547,7 @@ def main() -> int:
         person_program_text=person_program_text,
         agent_program_text=agent_program_text,
         run_state=run_state,
+        authoritative_handoff=(authoritative_handoff or {}).get("payload"),
     )
     canonical_prompt_hash = prompt_contract["canonical_state_hash"]
     rendered_run_state = prompt_contract["render_state"]
@@ -474,6 +590,7 @@ def main() -> int:
         report_path=str(report_file),
         supervisor_template=supervisor_template,
         legacy_task=args.task,
+        authoritative_handoff=authoritative_handoff,
     )
     prompt_file = write_prompt_file(paths.prompts_root, prompt_text)
     output_file = paths.last_agent_message
@@ -552,7 +669,7 @@ def main() -> int:
     if args.dry_run:
         return 0
     start_time = now_utc_iso()
-    completed = subprocess.run(cmd, cwd=role_surface_root, input=prompt_text, text=True)
+    completed = run_codex_command(cmd, cwd=role_surface_root, prompt_text=prompt_text)
     merge_observability_sidecar(
         paths.agent_observability,
         {
@@ -594,3 +711,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
