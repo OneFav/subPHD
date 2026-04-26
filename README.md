@@ -6,7 +6,7 @@ English | [中文](README.zh-CN.md)
 
 sub-PHD is a lightweight local multi-agent framework for "human-AI collaboration + auto-research." You periodically hold "group meetings" with the agent to express your research thinking, needs, and adjustments, and the agent keeps trying things and running experiments according to **your line of thought**, like a grad student.
 
-![1777191565693](image/README.zh-CN/1777191565693.png)
+<img src="image/README.zh-CN/1777191565693.png" alt="sub-PHD overview" width="924" />
 
 ## 🚀 How to install
 
@@ -99,4 +99,4 @@ Use it when you want Codex to help improve `person_program.md`:
 
    Everyone is welcome to join the sub-PHD group chat~
 
-   ![1777192938397](image/README.zh-CN/1777192938397.jpg)
+   <img src="image/README.zh-CN/1777192938397.jpg" alt="sub-PHD group chat" width="574" />

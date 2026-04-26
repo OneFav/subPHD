@@ -6,7 +6,7 @@
 
 sub-PHD 是一个面向“人机协同+autoresearch”的本地多agent轻量框架。你通过定期同agent“开组会”来表达个人科研的思考、需求和调整，agent 像博士生一样不断按照你的**思路**去尝试和做实验。
 
-![1777191565693](image/README.zh-CN/1777191565693.png)
+<img src="image/README.zh-CN/1777191565693.png" alt="sub-PHD 总览图" width="924" />
 
 ## 🚀 如何安装
 
@@ -99,4 +99,4 @@ sub-PHD 是一个面向“人机协同+autoresearch”的本地多agent轻量框
 
    欢迎大家加入sub-PHD交流群~
 
-   ![1777192938397](image/README.zh-CN/1777192938397.jpg)
+   <img src="image/README.zh-CN/1777192938397.jpg" alt="sub-PHD 交流群" width="574" />
