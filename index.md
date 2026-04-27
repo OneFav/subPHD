@@ -42,8 +42,10 @@ If those skills are not yet available in the active Codex environment, deploy th
   - Use the answer to shape `person_program.md`.
 - What code should live under `research/`?
   - Move or confirm user code there, but do not silently rewrite business logic.
-- Should this project use SSH / remote execution?
-  - If yes, ask for:
+- Should this project run experiments locally or through SSH?
+  - Local means the current machine is the experiment machine, even if the current machine is already a remote development server.
+  - SSH means this starter controls a separate experiment machine through SSH/SCP.
+  - If SSH, ask for:
     - `ssh_key`
     - `host`
     - `port`
@@ -56,10 +58,147 @@ If those skills are not yet available in the active Codex environment, deploy th
 
 ## Configuration Rules
 - This repository ships with empty SSH defaults.
-- If the user wants SSH, populate the `remote` section in `research_agent.toml`.
-- If the user does not want SSH yet, leave the `remote` values empty and keep the local starter usable.
+- Execution backend is selected in `research_agent.toml`:
+  - `execution.backend = "local"` for local background experiments.
+  - `execution.backend = "ssh"` for SSH-controlled remote experiments.
+- If the user wants SSH, set `execution.backend = "ssh"` and populate the `remote` section in `research_agent.toml`.
+- If the user does not want SSH, set `execution.backend = "local"` and leave the `remote` values empty.
 - Keep `person_program.md` human-owned.
 - Treat `agent_program.md` as framework-managed unless the user explicitly asks otherwise.
+
+## Execution Backend Implementation Notes For Agents
+
+The autoresearch loop is intentionally backend-neutral:
+
+```text
+reader -> runner -> watch -> reader/runner
+```
+
+The backend only changes how runner launches experiments and how watch observes them.
+
+### Implementation surface
+When changing backend behavior, update these files together so the agent prompt, loop state, and supervisor stay consistent:
+
+- `research_agent.toml`: user-facing backend switch and backend-specific defaults.
+- `scripts/research_loop_contract.py`: backend enum, config resolution, default loop/run/watch state, state validation, and local runner skill templates.
+- `scripts/research_agent_cli.py`: runner backend validation, selected runner skills, generated prompt text, and launch metadata.
+- `scripts/research_supervisor.py`: actual launch/watch implementation. SSH uses `launch-bash` and `watch`; local uses `launch --backend local` and `watch-backend --backend local`.
+- `scripts/research_autoloop.py`: chooses `watch_local` or `watch_remote` from `run-state.json.execution_backend` or `research_agent.toml.execution.backend`, then applies `advance_run_state_after_watch`.
+- `roles/runner/AGENTS.md` and `roles/runner/skills/`: backend-neutral runner contract plus optional backend-specific skills such as `local-experiment` and `local-watch`.
+
+### Local backend
+Use local mode when the current machine should run the experiment:
+
+```toml
+[execution]
+backend = "local"
+
+[local]
+workdir = "."
+result_dir = "results"
+log_dir = ".omx/logs/local-runs"
+pid_dir = ".omx/state/local-runs"
+gpu_count = 1
+```
+
+Runner should launch long experiments as background local jobs:
+
+```powershell
+python scripts\research_supervisor.py launch --backend local --local-workdir . --local-result-dir results --local-log-dir .omx/logs/local-runs --local-pid-dir .omx/state/local-runs --run-id <run-id> --script-file <local-command-script>
+```
+
+Then watch with:
+
+```powershell
+python scripts\research_supervisor.py watch-backend --backend local --local-pid-dir .omx/state/local-runs --run-id <run-id> --local-result-dir results --local-glob "*.json" --poll-seconds 300 --max-polls 120
+```
+
+Local launch writes metadata to:
+
+```text
+.omx/state/local-runs/<run-id>.json
+```
+
+and logs to:
+
+```text
+.omx/logs/local-runs/<run-id>.log
+```
+
+### SSH backend
+Use SSH mode when experiments run on a separate machine:
+
+```toml
+[execution]
+backend = "ssh"
+```
+
+Populate:
+
+```toml
+[remote]
+ssh_key = "..."
+host = "..."
+port = 22
+remote_code_dir = "..."
+remote_result_dir = "..."
+gpu_count = 1
+```
+
+Runner should use the existing SSH supervisor commands:
+
+```powershell
+python scripts\research_supervisor.py launch-bash --ssh-key <ssh_key> --host <host> --port <port> --remote-workdir <remote_code_dir> --script-file <local-bash-script>
+python scripts\research_supervisor.py watch --ssh-key <ssh_key> --host <host> --port <port> --screen-prefix <run-id> --remote-result-dir <remote_result_dir> --local-result-dir .omx/synced-results --local-glob "*.json"
+```
+
+### Runner state transitions
+Runner and watch communicate through `.omx/state/run-state.json`. Treat this file as the source of truth for the current runner lifecycle.
+
+When runner starts an experiment successfully, update the state like this:
+
+```json
+{
+  "phase": "watch",
+  "next_action": "watch",
+  "run_id": "<run-id>",
+  "execution_backend": "local",
+  "execution_status": "running",
+  "remote_status": "running"
+}
+```
+
+For SSH, use `"execution_backend": "ssh"` and the same phase/status pattern. `remote_status` is retained for compatibility; do not introduce a separate local-only status field. Use `execution_status` for backend-neutral logic.
+
+Watch writes a unified snapshot with:
+
+```json
+{
+  "backend": "local",
+  "watch_status": "running | synced | failed | timed_out | missing",
+  "runner_active": true,
+  "local_evidence_paths": {}
+}
+```
+
+Autoloop uses `watch_status` to decide the next state:
+
+- `synced`: evidence is available. If `runner_iteration >= runner_iteration_cap`, hand back to reader; otherwise continue runner.
+- `running`: stay in `phase = "watch"`.
+- `failed`, `timed_out`, or `missing`: return to runner with `next_action = "self_repair_and_retry"`.
+
+When manually repairing runner state, keep these invariants:
+
+- `phase` and `next_action` must agree:
+  - active experiment: `phase = "watch"`, `next_action = "watch"`
+  - evidence ready for reader: `phase = "reader"`, `next_action = "reader"`
+  - runner retry needed: `phase = "runner"`, `next_action = "self_repair_and_retry"`
+- Preserve `run_id` until the watch phase has consumed the matching launch metadata.
+- Preserve or set `execution_backend` to `local` or `ssh`; never infer SSH just because fields are named `remote_*`.
+- On failure, increment the repair counter through the existing loop code path when possible and write a concise `last_error`.
+- `local_evidence_paths` must point only to local filesystem paths, even when evidence came from SSH sync.
+
+Do not hardcode SSH behavior in runner or watch logic. Always read `execution.backend` or `run-state.json.execution_backend`.
 
 ## Required Validation
 Run these checks after initialization changes.
@@ -76,6 +215,18 @@ python scripts\research_agent_cli.py --workdir . --role reader --dry-run
 python scripts\research_agent_cli.py --workdir . --role runner --dry-run
 python scripts\research_autoloop.py --workdir . --max-runs 1 --hours 0.01 --ignore-state --dry-run
 ```
+
+### Local execution validation
+Run this when `execution.backend = "local"`:
+
+```powershell
+New-Item -ItemType Directory -Force .omx | Out-Null
+Set-Content -Path .omx\local-smoke.ps1 -Encoding UTF8 -Value "New-Item -ItemType Directory -Force results | Out-Null; Set-Content -Path results\local_smoke.json -Encoding UTF8 -Value '{`"ok`":true}'"
+python scripts\research_supervisor.py launch --backend local --local-workdir . --local-result-dir results --local-log-dir .omx/logs/local-runs --local-pid-dir .omx/state/local-runs --run-id local-smoke --script-file .omx\local-smoke.ps1
+python scripts\research_supervisor.py watch-backend --backend local --local-pid-dir .omx/state/local-runs --run-id local-smoke --local-result-dir results --local-glob "local_smoke.json" --poll-seconds 1 --max-polls 3
+```
+
+Expected result: final watch JSON includes `"backend": "local"` and `"watch_status": "synced"`.
 
 ### SSH validation
 - Only run this after the user has confirmed remote execution should be enabled.
