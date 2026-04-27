@@ -258,6 +258,11 @@ python scripts/research_dashboard.py --workdir .
 - `agent_program.md` can remain auto-managed; the human only needs to maintain `person_program.md` to get started.
 - `subphd-run-disclosure` is the preferred skill for understanding what the project is currently doing.
 - `subphd-program-refinement` is the preferred skill for revising `person_program.md`.
+- Optional external carrier-agent skills may also be present under `skills/subphd-inspect/`,
+  `skills/subphd-control/`, and `skills/subphd-watch/`. They are examples for
+  Hermes/OpenClaw-style assistants that manage multiple sub-PHD projects from outside
+  the runtime; they are not part of the mandatory two-skill setup flow and do not mean
+  this starter implements a scheduler or registry API.
 - Continuity uses role-local windows with a short resume budget rather than unbounded same-chat history.
 - The authoritative handoff under the reports root should be treated as the first continuity source before generic recent reports.
 """
@@ -294,6 +299,13 @@ That `index.md` file is the agent-facing setup contract. It tells Codex to deplo
 ## Recommended usage
 - Use `subphd-run-disclosure` to understand what the current run window is doing and how complete it is versus `person_program.md`.
 - Use `subphd-program-refinement` when you want Codex to improve or rewrite `person_program.md`.
+- Optional external carrier-agent examples may also be present:
+  - `skills/subphd-inspect/`
+  - `skills/subphd-control/`
+  - `skills/subphd-watch/`
+  These are for outside assistants that manage multiple sub-PHD projects. They are not
+  part of the mandatory two-skill initialization flow and they do not add a runtime
+  scheduler or registry API.
 
 ## Quick start
 1. Copy or unzip this starter into the new repo.
@@ -343,6 +355,10 @@ def render_pack_readme_zh() -> str:
 ## ????
 - ? `subphd-run-disclosure` ??????????? run ????????? `person_program.md` ?????
 - ? `subphd-program-refinement` ????? `person_program.md`?
+- Optional external carrier-agent examples may also be present: `skills/subphd-inspect/`,
+  `skills/subphd-control/`, and `skills/subphd-watch/`. They are for outside assistants
+  that manage multiple sub-PHD projects; they are not part of the mandatory two-skill
+  initialization flow and do not add a runtime scheduler or registry API.
 
 ## ????
 1. ??? starter ????????????
@@ -383,6 +399,11 @@ def build_migration_pack(root: Path, output_dir: Path) -> tuple[Path, Path]:
     skills_root = root / "skills"
     if skills_root.exists():
         shutil.copytree(skills_root, pack_root / "skills", dirs_exist_ok=True)
+    protocol_doc = root / "docs" / "subphd-agent-protocol.md"
+    if protocol_doc.exists():
+        docs_root = pack_root / "docs"
+        docs_root.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(protocol_doc, docs_root / "subphd-agent-protocol.md")
     if not (pack_root / "start.bat").exists():
         atomic_write_text(pack_root / "start.bat", render_start_bat())
     if not (pack_root / "resume.bat").exists():

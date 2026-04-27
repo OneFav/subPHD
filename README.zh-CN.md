@@ -70,6 +70,16 @@ sub-PHD 是一个面向“人机协同+autoresearch”的本地多agent轻量框
 - 提出更好的 `person_program.md` 改写版本
 - 让 mission 更正确，但不要过早写死
 
+## Optional external carrier-agent skills
+
+For Hermes, OpenClaw, Claude Code, Codex, or custom assistants that manage multiple sub-PHD projects from outside the runtime, this repository also ships optional external carrier-agent examples:
+
+- `skills/subphd-inspect/`: read-only cross-project status and evidence summaries.
+- `skills/subphd-control/`: start/resume, guarded stop guidance, and project creation through official entrypoints and confirmation gates.
+- `skills/subphd-watch/`: carrier-side reminder and alert rules stored outside project directories.
+
+These are not part of the mandatory two-skill initialization flow and they are separate from the internal Reader/Runner role skills. See `docs/subphd-agent-protocol.md` for the protocol.
+
 ## 🔁 运行模型
 
 - `start.bat` = 开启一个新的大轮次

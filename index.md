@@ -37,6 +37,28 @@ This starter now ships two companion skills that should be available to Codex du
 
 If those skills are not yet available in the active Codex environment, deploy them before setup finishes.
 
+
+## Optional external carrier-agent skills
+This starter may also include three optional external carrier-agent examples for assistants such as Hermes, OpenClaw, Claude Code, Codex, or custom agents that manage multiple sub-PHD projects from outside the runtime:
+
+- `skills/subphd-inspect/`
+- `skills/subphd-control/`
+- `skills/subphd-watch/`
+
+What changed:
+- `subphd-inspect` gives an external assistant a read-only way to answer status, evidence, progress, and cross-project summary questions across one or more sub-PHD projects.
+- `subphd-control` gives an external assistant guarded lifecycle instructions for start/resume, exact-process stop guidance, and new-project creation/registration through official sub-PHD entrypoints and explicit confirmation gates.
+- `subphd-watch` gives an external assistant a carrier-side watch-rule contract for reminders, alerts, periodic summaries, list/update/cancel operations, and cooldown/conflict handling.
+
+These are **not** part of the mandatory two-skill initialization flow above. Do not add them to Step 2 unless the user explicitly wants external carrier-agent control. They are also separate from Reader/Runner role-local skills under `roles/`.
+
+Protocol summary:
+- Project resolution goes through `~/.subphd-agent/projects.json` or `%USERPROFILE%\.subphd-agent\projects.json`, or a carrier-agent override. Do not scan disks.
+- Watch rules live in `~/.subphd-agent/watch-rules.json` or `%USERPROFILE%\.subphd-agent\watch-rules.json`, or a carrier-agent override. Do not write watch rules into project directories.
+- Start/resume control still goes through `start.bat`, `resume.bat`, or `python scripts/research_autoloop.py`; there is no official `stop.bat` in this pass.
+- Migration packs copy these optional external skills and `docs/subphd-agent-protocol.md` so the `index.md` protocol link remains valid after packaging.
+- Full protocol in the source repository: `docs/subphd-agent-protocol.md`.
+
 ## Questions To Ask The User
 - What is the project trying to do?
   - Use the answer to shape `person_program.md`.

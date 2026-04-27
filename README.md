@@ -70,6 +70,16 @@ Use it when you want Codex to help improve `person_program.md`:
 - propose a better rewrite of `person_program.md`
 - make the mission more correct without freezing it too early
 
+## ??? Optional external carrier-agent skills
+
+For Hermes, OpenClaw, Claude Code, Codex, or custom assistants that manage multiple sub-PHD projects from outside the runtime, this repository also ships optional external carrier-agent examples:
+
+- `skills/subphd-inspect/`: read-only cross-project status and evidence summaries.
+- `skills/subphd-control/`: start/resume, guarded stop guidance, and project creation through official entrypoints and confirmation gates.
+- `skills/subphd-watch/`: carrier-side reminder and alert rules stored outside project directories.
+
+These are not part of the mandatory two-skill initialization flow and they are separate from the internal Reader/Runner role skills. See `docs/subphd-agent-protocol.md` for the protocol.
+
 ## 🔁 Runtime model
 
 - `start.bat` = start a new major round
@@ -82,6 +92,8 @@ Use it when you want Codex to help improve `person_program.md`:
 - `index.md`: the initialization entry contract for this starter. The agent reads it first, then follows its flow to install the repo-shipped skills, ask the minimum configuration questions, fill in the framework files, and run a smoke check.
 - `skills/subphd-run-disclosure/`: the skill for explaining "what this whole run actually did." It is instructed to read reports, synced results, and `run-state.json` under `.subphd/` first, then produce an evidence-oriented run brief for the human.
 - `skills/subphd-program-refinement/`: the skill for gradually turning a vague research direction into a candidate rewrite of `person_program.md`. It emphasizes one-question-at-a-time refinement, producing a candidate version first, and only writing it after user confirmation.
+- `docs/subphd-agent-protocol.md`: the protocol for optional external carrier-agent skills that manage multiple sub-PHD projects through an external project manifest.
+- `skills/subphd-inspect/`, `skills/subphd-control/`, `skills/subphd-watch/`: optional external carrier-agent examples for inspect/control/watch workflows. They are not the mandatory setup pair and do not add a runtime scheduler or registry API.
 - `person_program.md`: the human-maintained mission anchor file. In the codebase it is treated as a human-owned control document that defines the current mission, priorities, reader/runner responsibilities, and success conditions for this round.
 - `agent_program.md`: the framework-maintained execution strategy file. The reader updates it directly during the loop, tightening the current strategy and next handoff into an executable task boundary for the runner.
 - `research_agent.toml`: the top-level runtime configuration. It defines the default model, time and run limits, SSH remote execution parameters, and the artifact paths for `person_program.md`, `.subphd/state/*`, logs, and synced results.
