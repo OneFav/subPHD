@@ -68,9 +68,37 @@ watch_events = ".omx/state/research_watch_events.jsonl"
                 paths.runner_role_root / "skills" / "experiment-bridge" / "SKILL.md",
                 paths.runner_role_root / "skills" / "monitor-experiment" / "SKILL.md",
                 paths.runner_role_root / "skills" / "training-check" / "SKILL.md",
+                paths.runner_role_root / "skills" / "local-experiment" / "SKILL.md",
+                paths.runner_role_root / "skills" / "local-watch" / "SKILL.md",
             ]
             for skill_path in expected_skills:
                 self.assertTrue(skill_path.exists(), skill_path)
+
+    def test_resolve_execution_backend_defaults_to_ssh_when_remote_config_exists(self) -> None:
+        config = {"remote": {"host": "host", "ssh_key": "key", "remote_code_dir": "/code"}}
+        self.assertEqual(contract.resolve_execution_backend(config), "ssh")
+
+    def test_resolve_execution_backend_uses_explicit_local(self) -> None:
+        config = {"execution": {"backend": "local"}, "remote": {"host": "host"}}
+        self.assertEqual(contract.resolve_execution_backend(config), "local")
+
+    def test_resolve_execution_backend_rejects_unknown_backend(self) -> None:
+        with self.assertRaises(ValueError):
+            contract.resolve_execution_backend({"execution": {"backend": "docker"}})
+
+    def test_default_run_state_includes_execution_backend_and_status(self) -> None:
+        state = contract.default_run_state({"execution": {"backend": "local"}})
+        self.assertEqual(state["execution_backend"], "local")
+        self.assertEqual(state["execution_status"], "idle")
+        self.assertEqual(state["remote_status"], "idle")
+
+    def test_default_remaining_budget_prefers_local_gpu_count_in_local_mode(self) -> None:
+        budget = contract.default_remaining_budget({
+            "execution": {"backend": "local"},
+            "local": {"gpu_count": 2},
+            "remote": {"gpu_count": 8},
+        })
+        self.assertEqual(budget["gpu_count"], 2)
 
     def test_append_ai_worklog_entry_writes_required_fields(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

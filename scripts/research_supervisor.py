@@ -11,6 +11,7 @@ if str(ROOT_DIR) not in sys.path:
 
 import argparse
 import json
+import os
 import shlex
 import subprocess
 import time
@@ -39,6 +40,22 @@ class RemoteConfig:
     ssh_key: str
     host: str
     port: int = 22
+
+
+@dataclass
+class LocalRunConfig:
+    workdir: Path
+    result_dir: Path
+    log_dir: Path
+    pid_dir: Path
+
+
+_LOCAL_BACKGROUND_PROCESSES: list[subprocess.Popen[Any]] = []
+
+
+def _remember_local_process(proc: subprocess.Popen[Any]) -> None:
+    _LOCAL_BACKGROUND_PROCESSES[:] = [item for item in _LOCAL_BACKGROUND_PROCESSES if item.poll() is None]
+    _LOCAL_BACKGROUND_PROCESSES.append(proc)
 
 
 def _run(cmd: list[str], timeout: int = 60) -> str:
@@ -145,6 +162,125 @@ def run_remote_bash_file(
     )
 
 
+def is_process_active(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    try:
+        if sys.platform.startswith("win"):
+            result = subprocess.run(
+                ["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            return str(pid) in (result.stdout or "")
+        os.kill(pid, 0)
+        return True
+    except Exception:
+        return False
+
+
+def _local_metadata_path(config: LocalRunConfig, run_id: str) -> Path:
+    return config.pid_dir / f"{run_id}.json"
+
+
+def _local_result_paths(result_dir: Path, local_glob: str) -> dict[str, str]:
+    if not result_dir.exists():
+        return {}
+    return {path.name: str(path) for path in sorted(result_dir.glob(local_glob)) if path.is_file()}
+
+
+def _local_script_command(script_file: Path) -> list[str] | str:
+    suffix = script_file.suffix.lower()
+    if suffix == ".ps1":
+        return ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(script_file)]
+    if suffix in {".cmd", ".bat"}:
+        return ["cmd", "/c", str(script_file)]
+    if suffix == ".py":
+        return [sys.executable, str(script_file)]
+    if sys.platform.startswith("win"):
+        return ["cmd", "/c", str(script_file)]
+    return ["bash", str(script_file)]
+
+
+def launch_local_bash_file(
+    *,
+    config: LocalRunConfig,
+    script_file: Path,
+    run_id: str | None = None,
+) -> dict[str, Any]:
+    run_id = run_id or f"local-{time.strftime('%Y%m%dT%H%M%S')}"
+    config.workdir.mkdir(parents=True, exist_ok=True)
+    config.result_dir.mkdir(parents=True, exist_ok=True)
+    config.log_dir.mkdir(parents=True, exist_ok=True)
+    config.pid_dir.mkdir(parents=True, exist_ok=True)
+    log_path = config.log_dir / f"{run_id}.log"
+    metadata_path = _local_metadata_path(config, run_id)
+    command = _local_script_command(script_file.resolve())
+    log_path.touch()
+    command_text = command if isinstance(command, str) else " ".join(command)
+    wrapper_path = config.pid_dir / f"{run_id}-wrapper.py"
+    wrapper_path.write_text(
+        "\n".join([
+            "import json, subprocess, sys",
+            "from datetime import datetime, timezone",
+            f"metadata_path = {str(metadata_path)!r}",
+            f"log_path = {str(log_path)!r}",
+            f"workdir = {str(config.workdir)!r}",
+            f"command = {command!r}",
+            "def now(): return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace('+00:00', 'Z')",
+            "returncode = 1",
+            "try:",
+            "    with open(log_path, 'ab') as log_handle:",
+            "        proc = subprocess.run(command, cwd=workdir, stdout=log_handle, stderr=subprocess.STDOUT, shell=False)",
+            "        returncode = int(proc.returncode)",
+            "finally:",
+            "    try:",
+            "        with open(metadata_path, 'r', encoding='utf-8-sig') as f:",
+            "            metadata = json.load(f)",
+            "    except Exception:",
+            "        metadata = {}",
+            "    metadata['returncode'] = returncode",
+            "    metadata['ended_at'] = now()",
+            "    metadata['updated_at'] = now()",
+            "    with open(metadata_path, 'w', encoding='utf-8') as f:",
+            "        json.dump(metadata, f, ensure_ascii=False, indent=2)",
+            "sys.exit(returncode)",
+            "",
+        ]),
+        encoding="utf-8",
+    )
+    metadata = {
+        "schema_version": SCHEMA_VERSION,
+        "backend": "local",
+        "run_id": run_id,
+        "pid": None,
+        "returncode": None,
+        "command": command_text,
+        "wrapper": str(wrapper_path),
+        "workdir": str(config.workdir),
+        "log_path": str(log_path),
+        "result_dir": str(config.result_dir),
+        "metadata_path": str(metadata_path),
+        "started_at": now_utc_iso(),
+        "updated_at": now_utc_iso(),
+    }
+    atomic_write_json(metadata_path, metadata)
+    proc = subprocess.Popen(
+        [sys.executable, str(wrapper_path)],
+        cwd=str(config.workdir),
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        shell=False,
+    )
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8-sig"))
+    metadata["pid"] = int(proc.pid)
+    metadata["updated_at"] = now_utc_iso()
+    atomic_write_json(metadata_path, metadata)
+    _remember_local_process(proc)
+    return metadata
+
+
 def build_watch_snapshot(
     *,
     assignment_id: str,
@@ -156,11 +292,13 @@ def build_watch_snapshot(
     remote_jsons: list[str],
     local_evidence_paths: dict[str, Any] | None,
     failure_reason: str | None,
+    backend: str | None = None,
 ) -> dict[str, Any]:
     return {
         "schema_version": SCHEMA_VERSION,
         "assignment_id": assignment_id,
         "run_id": run_id,
+        "backend": backend,
         "watch_status": watch_status,
         "runner_active": runner_active,
         "supervisor_polling": supervisor_polling,
@@ -382,6 +520,165 @@ def watch_remote(
     return timeout_snapshot
 
 
+def poll_local(
+    *,
+    metadata_path: Path,
+    result_dir: Path,
+    assignment_id: str = "",
+    run_id: str | None = None,
+    local_glob: str = "*.json",
+    snapshot_path: Path | None = None,
+    event_log_path: Path | None = None,
+) -> dict[str, Any]:
+    if not metadata_path.exists():
+        snapshot = build_watch_snapshot(
+            assignment_id=assignment_id,
+            run_id=run_id,
+            watch_status="missing",
+            runner_active=False,
+            supervisor_polling=False,
+            remote_screen_names=[],
+            remote_jsons=[],
+            local_evidence_paths=None,
+            failure_reason="local_run_metadata_missing",
+            backend="local",
+        )
+        write_watch_artifacts(
+            snapshot_path=snapshot_path,
+            event_log_path=event_log_path,
+            snapshot=snapshot,
+            assignment_id=assignment_id,
+            run_id=run_id,
+            event_type="poll_missing",
+            reason="local_run_metadata_missing",
+            source="local-supervisor",
+        )
+        return snapshot
+
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8-sig"))
+    effective_run_id = run_id or metadata.get("run_id")
+    pid = int(metadata.get("pid") or 0)
+    returncode = metadata.get("returncode")
+    active = is_process_active(pid) if returncode is None else False
+    local_paths = _local_result_paths(result_dir, local_glob)
+    if active:
+        status = "running"
+        failure_reason = None
+    elif returncode not in (None, 0):
+        status = "failed"
+        failure_reason = f"local_process_exit_{returncode}"
+    elif local_paths:
+        status = "synced"
+        failure_reason = None
+    else:
+        status = "missing"
+        failure_reason = "no_local_results_found"
+    snapshot = build_watch_snapshot(
+        assignment_id=assignment_id,
+        run_id=effective_run_id,
+        watch_status=status,
+        runner_active=active,
+        supervisor_polling=True,
+        remote_screen_names=[],
+        remote_jsons=[],
+        local_evidence_paths=local_paths or None,
+        failure_reason=failure_reason,
+        backend="local",
+    )
+    snapshot["local_log_path"] = metadata.get("log_path")
+    write_watch_artifacts(
+        snapshot_path=snapshot_path,
+        event_log_path=event_log_path,
+        snapshot=snapshot,
+        assignment_id=assignment_id,
+        run_id=effective_run_id,
+        event_type="poll",
+        reason="local_poll",
+        source="local-supervisor",
+    )
+    return snapshot
+
+
+def watch_local(
+    *,
+    metadata_path: Path,
+    result_dir: Path,
+    poll_seconds: int,
+    snapshot_path: Path | None,
+    event_log_path: Path | None,
+    max_polls: int,
+    assignment_id: str,
+    run_id: str | None,
+    local_glob: str = "*.json",
+) -> dict[str, Any]:
+    last_snapshot: dict[str, Any] | None = None
+    for _ in range(max_polls):
+        snapshot = poll_local(
+            metadata_path=metadata_path,
+            result_dir=result_dir,
+            assignment_id=assignment_id,
+            run_id=run_id,
+            local_glob=local_glob,
+            snapshot_path=snapshot_path,
+            event_log_path=event_log_path,
+        )
+        last_snapshot = snapshot
+        if snapshot["watch_status"] in {"synced", "failed", "missing"}:
+            terminal = dict(snapshot)
+            terminal["supervisor_polling"] = False
+            terminal["updated_at"] = now_utc_iso()
+            write_watch_artifacts(
+                snapshot_path=snapshot_path,
+                event_log_path=event_log_path,
+                snapshot=terminal,
+                assignment_id=assignment_id,
+                run_id=terminal.get("run_id"),
+                event_type="watch_terminal",
+                reason=terminal["watch_status"],
+                source="local-supervisor",
+            )
+            return terminal
+        time.sleep(poll_seconds)
+    if last_snapshot is not None and last_snapshot.get("runner_active"):
+        heartbeat = dict(last_snapshot)
+        heartbeat["supervisor_polling"] = False
+        heartbeat["updated_at"] = now_utc_iso()
+        write_watch_artifacts(
+            snapshot_path=snapshot_path,
+            event_log_path=event_log_path,
+            snapshot=heartbeat,
+            assignment_id=assignment_id,
+            run_id=heartbeat.get("run_id"),
+            event_type="watch_heartbeat",
+            reason="runner_still_active",
+            source="local-supervisor",
+        )
+        return heartbeat
+    timeout_snapshot = build_watch_snapshot(
+        assignment_id=assignment_id,
+        run_id=run_id,
+        watch_status="timed_out",
+        runner_active=False,
+        supervisor_polling=False,
+        remote_screen_names=[],
+        remote_jsons=[],
+        local_evidence_paths=None,
+        failure_reason="watch_timeout",
+        backend="local",
+    )
+    write_watch_artifacts(
+        snapshot_path=snapshot_path,
+        event_log_path=event_log_path,
+        snapshot=timeout_snapshot,
+        assignment_id=assignment_id,
+        run_id=run_id,
+        event_type="watch_timeout",
+        reason="timed_out",
+        source="local-supervisor",
+    )
+    return timeout_snapshot
+
+
 def cli_poll(args: argparse.Namespace) -> int:
     config = RemoteConfig(args.ssh_key, args.host, args.port)
     snapshot = poll_remote(
@@ -406,6 +703,34 @@ def cli_aggregate(args: argparse.Namespace) -> int:
 
 
 def cli_launch_bash(args: argparse.Namespace) -> int:
+    config = RemoteConfig(args.ssh_key, args.host, args.port)
+    output = run_remote_bash_file(
+        config=config,
+        remote_workdir=args.remote_workdir,
+        script_file=Path(args.script_file),
+        timeout=args.timeout,
+    )
+    print(output)
+    return 0
+
+
+def cli_launch(args: argparse.Namespace) -> int:
+    if args.backend == "local":
+        config = LocalRunConfig(
+            workdir=Path(args.local_workdir),
+            result_dir=Path(args.local_result_dir),
+            log_dir=Path(args.local_log_dir),
+            pid_dir=Path(args.local_pid_dir),
+        )
+        metadata = launch_local_bash_file(
+            config=config,
+            script_file=Path(args.script_file),
+            run_id=args.run_id,
+        )
+        print(json.dumps(metadata, ensure_ascii=False, indent=2))
+        return 0
+    if not args.ssh_key or not args.host or not args.remote_workdir:
+        raise ValueError("ssh launch requires --ssh-key, --host, and --remote-workdir")
     config = RemoteConfig(args.ssh_key, args.host, args.port)
     output = run_remote_bash_file(
         config=config,
@@ -467,6 +792,41 @@ def cli_watch(args: argparse.Namespace) -> int:
     return 0
 
 
+def cli_watch_backend(args: argparse.Namespace) -> int:
+    if args.backend == "local":
+        metadata_path = Path(args.local_metadata_path) if args.local_metadata_path else Path(args.local_pid_dir) / f"{args.run_id or 'latest'}.json"
+        snapshot = watch_local(
+            metadata_path=metadata_path,
+            result_dir=Path(args.local_result_dir),
+            poll_seconds=args.poll_seconds,
+            snapshot_path=Path(args.snapshot_path) if args.snapshot_path else None,
+            event_log_path=Path(args.event_log_path) if args.event_log_path else None,
+            max_polls=args.max_polls,
+            assignment_id=args.assignment_id,
+            run_id=args.run_id,
+            local_glob=args.local_glob,
+        )
+        print(json.dumps(snapshot, ensure_ascii=False, indent=2))
+        return 0
+    if not args.ssh_key or not args.host or not args.remote_result_dir or not args.local_result_dir_for_ssh:
+        raise ValueError("ssh watch-backend requires --ssh-key, --host, --remote-result-dir, and --local-result-dir-for-ssh")
+    config = RemoteConfig(args.ssh_key, args.host, args.port)
+    snapshot = watch_remote(
+        config=config,
+        screen_prefixes=args.screen_prefix,
+        remote_result_dir=args.remote_result_dir,
+        local_result_dir=Path(args.local_result_dir_for_ssh),
+        poll_seconds=args.poll_seconds,
+        snapshot_path=Path(args.snapshot_path) if args.snapshot_path else None,
+        event_log_path=Path(args.event_log_path) if args.event_log_path else None,
+        max_polls=args.max_polls,
+        assignment_id=args.assignment_id,
+        run_id=args.run_id,
+    )
+    print(json.dumps(snapshot, ensure_ascii=False, indent=2))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(description="Research-grade supervisor for remote experiment polling, syncing, and logging.")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -487,6 +847,21 @@ def build_parser() -> argparse.ArgumentParser:
     agg = sub.add_parser("aggregate")
     agg.add_argument("paths", nargs="+")
     agg.set_defaults(func=cli_aggregate)
+
+    launch_any = sub.add_parser("launch")
+    launch_any.add_argument("--backend", choices=["local", "ssh"], required=True)
+    launch_any.add_argument("--script-file", required=True)
+    launch_any.add_argument("--run-id")
+    launch_any.add_argument("--timeout", type=int, default=300)
+    launch_any.add_argument("--local-workdir", default=".")
+    launch_any.add_argument("--local-result-dir", default="results")
+    launch_any.add_argument("--local-log-dir", default=".omx/logs/local-runs")
+    launch_any.add_argument("--local-pid-dir", default=".omx/state/local-runs")
+    launch_any.add_argument("--ssh-key")
+    launch_any.add_argument("--host")
+    launch_any.add_argument("--port", type=int, default=22)
+    launch_any.add_argument("--remote-workdir")
+    launch_any.set_defaults(func=cli_launch)
 
     launch = sub.add_parser("launch-bash")
     launch.add_argument("--ssh-key", required=True)
@@ -526,6 +901,26 @@ def build_parser() -> argparse.ArgumentParser:
     watch.add_argument("--results-jsonl", default="research/results.jsonl")
     watch.add_argument("--experiment-log-md", default="research/EXPERIMENT_LOG.md")
     watch.set_defaults(func=cli_watch)
+
+    watch_any = sub.add_parser("watch-backend")
+    watch_any.add_argument("--backend", choices=["local", "ssh"], required=True)
+    watch_any.add_argument("--local-metadata-path")
+    watch_any.add_argument("--local-pid-dir", default=".omx/state/local-runs")
+    watch_any.add_argument("--local-result-dir", default="results")
+    watch_any.add_argument("--local-glob", default="*.json")
+    watch_any.add_argument("--poll-seconds", type=int, default=300)
+    watch_any.add_argument("--max-polls", type=int, default=120)
+    watch_any.add_argument("--assignment-id", default="")
+    watch_any.add_argument("--run-id")
+    watch_any.add_argument("--snapshot-path")
+    watch_any.add_argument("--event-log-path")
+    watch_any.add_argument("--ssh-key")
+    watch_any.add_argument("--host")
+    watch_any.add_argument("--port", type=int, default=22)
+    watch_any.add_argument("--screen-prefix", action="append", default=[])
+    watch_any.add_argument("--remote-result-dir")
+    watch_any.add_argument("--local-result-dir-for-ssh")
+    watch_any.set_defaults(func=cli_watch_backend)
 
     return ap
 

@@ -11,6 +11,7 @@ from scripts.research_agent_cli import (
     build_codex_command,
     build_role_prompt,
     consume_pending_human_prompt_if_matched,
+    ensure_runner_backend_requirements,
     ensure_runner_remote_requirements,
     prepare_prompt_contract,
     run_codex_command,
@@ -217,6 +218,75 @@ class ResearchAgentCliTests(unittest.TestCase):
     def test_runner_launch_requires_remote_config(self) -> None:
         with self.assertRaises(ValueError):
             ensure_runner_remote_requirements({"remote": {"host": "x"}})
+
+    def test_runner_backend_requirements_allow_local_without_remote_config(self) -> None:
+        ensure_runner_backend_requirements({"execution": {"backend": "local"}, "local": {"result_dir": "results"}})
+
+    def test_runner_backend_requirements_require_remote_config_for_ssh(self) -> None:
+        with self.assertRaises(ValueError):
+            ensure_runner_backend_requirements({"execution": {"backend": "ssh"}, "remote": {"host": "x"}})
+
+    def test_build_role_prompt_in_local_mode_does_not_say_remote_only(self) -> None:
+        prompt = build_role_prompt(
+            role="runner",
+            person_program="person_summary",
+            agent_program="agent_summary",
+            person_program_full="# person",
+            agent_program_full="# agent",
+            run_state={
+                "phase": "runner",
+                "current_objective": "Run local smoke experiment.",
+                "runner_iteration": 1,
+                "execution_backend": "local",
+            },
+            poll_seconds=300,
+            report_path="C:/repo/.omx/reports/final.md",
+            supervisor_template="python scripts/research_supervisor.py launch --backend local",
+            legacy_task=None,
+            execution_backend="local",
+        )
+        self.assertIn("LOCAL execution mode", prompt)
+        self.assertIn("Do not require SSH", prompt)
+        self.assertNotIn("remain remote-only", prompt)
+        self.assertIn("local-experiment", prompt)
+        self.assertIn("local-watch", prompt)
+
+    def test_build_supervisor_template_for_local_backend_uses_local_commands(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config = {
+                "execution": {"backend": "local"},
+                "local": {
+                    "workdir": ".",
+                    "result_dir": "results",
+                    "log_dir": ".omx/logs/local-runs",
+                    "pid_dir": ".omx/state/local-runs",
+                },
+                "artifacts": {},
+            }
+            template = build_supervisor_template(root, 5, config)
+            self.assertIn("--backend local", template)
+            self.assertIn("watch-backend", template)
+            self.assertIn("--local-result-dir", template)
+            self.assertNotIn("--ssh-key", template)
+
+    def test_write_launch_metadata_records_local_backend_markers(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            metadata_path = root / "metadata.json"
+            write_launch_metadata(
+                metadata_path,
+                role="runner",
+                rendered_prompt_hash="hash",
+                prompt_file=root / "prompt.md",
+                command_file=root / "command.txt",
+                report_file=root / "report.md",
+                execution_backend="local",
+            )
+            payload = json.loads(metadata_path.read_text(encoding="utf-8"))
+            self.assertEqual(payload["execution_backend"], "local")
+            self.assertIn("--backend local", payload["canonical_transport_marker"])
+            self.assertIn("watch-backend --backend local", payload["canonical_watch_marker"])
 
     def test_cross_role_resume_is_rejected(self) -> None:
         loop_state = {

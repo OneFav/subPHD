@@ -4,6 +4,18 @@ default_hours = 8
 default_max_runs = 100
 default_poll_seconds = 300
 
+[execution]
+backend = "ssh"
+poll_seconds = 300
+max_polls = 120
+
+[local]
+workdir = "."
+result_dir = "results"
+log_dir = ".omx/logs/local-runs"
+pid_dir = ".omx/state/local-runs"
+gpu_count = 1
+
 [remote]
 ssh_key = ""
 host = ""

@@ -26,6 +26,7 @@ WATCH_STATUS_VALUES = {
     "missing",
     "failed",
 }
+EXECUTION_BACKEND_VALUES = {"local", "ssh"}
 
 DEFAULT_AGENT_PROGRAM = """# agent_program.md
 
@@ -115,7 +116,9 @@ Use this project-local role skill to keep runner work grounded:
 - implement the current bounded assignment in the repo working tree
 - validate with the smallest meaningful checks before handoff
 - record what changed and what evidence was gathered
-- before the remote run ends, prune `remote_result_dir` so only the compact core artifacts remain for watch sync
+- follow the configured execution backend (`local` or `ssh`) when launching or watching experiments
+- in SSH mode, before the remote run ends, prune `remote_result_dir` so only the compact core artifacts remain for watch sync
+- in local mode, keep compact evidence in the configured local result directory
 - delete unnecessary intermediate/process files by default
 - keep only the final decision/metrics/summary/manifest style artifacts unless the assignment explicitly requires more
 - if a large artifact might matter later, leave a small retained note about it rather than keeping the bulky file in `remote_result_dir`
@@ -166,6 +169,37 @@ Use during longer remote runs when training quality is uncertain.
 - if the run looks healthy, say which metric trend supports continuing
 - keep the summary short, concrete, and understandable to a human reading sub-PHD
 """,
+    "local-experiment": """---
+name: local-experiment
+description: Launch bounded runner experiments as local background jobs without SSH.
+---
+
+# Local Experiment
+
+Use this skill when `research_agent.toml` selects `[execution].backend = "local"`.
+
+- treat the current machine as the experiment host
+- do not require SSH, SCP, `remote_code_dir`, or `remote_result_dir`
+- launch long experiments as local background jobs through `scripts/research_supervisor.py launch --backend local`
+- write compact result evidence into `local.result_dir`
+- redirect stdout and stderr to the local run log path returned by the launcher
+- after a successful launch, set `run-state.json` to `phase = "watch"` and `next_action = "watch"`
+""",
+    "local-watch": """---
+name: local-watch
+description: Monitor local background experiment metadata, process state, logs, and result files.
+---
+
+# Local Watch
+
+Use this skill when `research_agent.toml` selects `[execution].backend = "local"` and the loop is monitoring a local run.
+
+- watch local run metadata, process status, logs, and result files
+- use `scripts/research_supervisor.py watch-backend --backend local`
+- treat `watch_status = "synced"` as local evidence ready for reader or runner review; no remote sync is needed
+- report failures as local process, log, heartbeat, or result problems, not SSH problems
+- keep `local_evidence_paths` pointing only to local files
+""",
 }
 
 
@@ -175,7 +209,26 @@ DEFAULT_ROLE_SURFACES: dict[str, dict[str, Any]] = {
         "skills": DEFAULT_READER_SKILLS,
     },
     "runner": {
-        "agents": """# Runner Role Surface\n\nYou are the project-local RUNNER role.\n\n## Purpose\n- Implement and verify bounded changes in the repo working tree.\n- Keep work focused on the current assignment and runtime contract.\n- Prefer real implementation + validation over further strategic churn.\n\n## Must preserve\n- Shared `person_program.md` + `agent_program.md` control model\n- Direct repo-root ownership for code and artifacts (no separate workspace directory)\n- Current benchmark semantics and runtime contract\n- Before ending a remote run, clean `remote_result_dir` so watch sync only sees the compact core artifacts that really need to come back locally\n- Delete bulky intermediate/process files by default; only keep the final core result set such as decisions, metrics, summaries, manifests, and other explicitly needed evidence\n- If a large artifact may matter later, prefer leaving a compact summary/manifest note that points to it rather than retaining the bulky file in `remote_result_dir`\n- When writing dashboard fields such as `expected_output` and `why`, use plain language, name the exact experiment/check/artifact/metric involved, and avoid vague filler like 'the process requires this'\n""",
+        "agents": """# Runner Role Surface
+
+You are the project-local RUNNER role.
+
+## Purpose
+- Implement and verify bounded changes in the repo working tree.
+- Keep work focused on the current assignment and runtime contract.
+- Prefer real implementation + validation over further strategic churn.
+- Follow the configured execution backend: local background jobs when backend is `local`, SSH supervisor when backend is `ssh`.
+
+## Must preserve
+- Shared `person_program.md` + `agent_program.md` control model
+- Direct repo-root ownership for code and artifacts (no separate workspace directory)
+- Current benchmark semantics and runtime contract
+- In local mode, do not require SSH/SCP or remote result paths; keep compact evidence in `local.result_dir`
+- In SSH mode, clean `remote_result_dir` so watch sync only sees the compact core artifacts that really need to come back locally
+- Delete bulky intermediate/process files by default; only keep the final core result set such as decisions, metrics, summaries, manifests, and other explicitly needed evidence
+- If a large artifact may matter later, prefer leaving a compact summary/manifest note that points to it rather than retaining the bulky file itself
+- When writing dashboard fields such as `expected_output` and `why`, use plain language, name the exact experiment/check/artifact/metric involved, and avoid vague filler like 'the process requires this'
+""",
         "skills": DEFAULT_RUNNER_SKILLS,
     },
 }
@@ -321,6 +374,26 @@ def require_enum(value: str | None, allowed: set[str], field: str) -> str:
     return str(value)
 
 
+def resolve_execution_backend(config: dict[str, Any] | None = None) -> str:
+    config = config or {}
+    execution = config.get("execution", {}) if isinstance(config, dict) else {}
+    explicit = execution.get("backend") if isinstance(execution, dict) else None
+    if explicit is None or str(explicit).strip() == "":
+        remote = config.get("remote", {}) if isinstance(config, dict) else {}
+        backend = "ssh" if isinstance(remote, dict) and remote else "local"
+    else:
+        backend = str(explicit).strip().lower()
+    return require_enum(backend, EXECUTION_BACKEND_VALUES, "execution.backend")
+
+
+def execution_backend_config(config: dict[str, Any] | None = None) -> dict[str, Any]:
+    config = config or {}
+    backend = resolve_execution_backend(config)
+    section = "local" if backend == "local" else "remote"
+    payload = config.get(section, {}) if isinstance(config, dict) else {}
+    return dict(payload) if isinstance(payload, dict) else {}
+
+
 def resolve_artifact_paths(root: Path, config: dict[str, Any] | None = None) -> ArtifactPaths:
     config = config or {}
     artifacts = config.get("artifacts", {}) if isinstance(config, dict) else {}
@@ -389,11 +462,14 @@ def resolve_artifact_paths(root: Path, config: dict[str, Any] | None = None) -> 
 def default_remaining_budget(config: dict[str, Any] | None = None) -> dict[str, Any]:
     config = config or {}
     remote = config.get("remote", {}) if isinstance(config, dict) else {}
+    local = config.get("local", {}) if isinstance(config, dict) else {}
     loop_cfg = config.get("loop", {}) if isinstance(config, dict) else {}
+    backend = resolve_execution_backend(config)
+    backend_gpu = local.get("gpu_count") if backend == "local" else remote.get("gpu_count")
     return {
         "hours": float(config.get("default_hours", 10)),
         "max_runs": int(config.get("default_max_runs", 30)),
-        "gpu_count": int(loop_cfg.get("gpu_count", remote.get("gpu_count", 4))),
+        "gpu_count": int(loop_cfg.get("gpu_count", backend_gpu if backend_gpu is not None else 4)),
     }
 
 
@@ -421,6 +497,7 @@ def default_loop_state(config: dict[str, Any] | None = None) -> dict[str, Any]:
 
 
 def default_run_state(config: dict[str, Any] | None = None) -> dict[str, Any]:
+    backend = resolve_execution_backend(config or {})
     return {
         "schema_version": SCHEMA_VERSION,
         "phase": "reader",
@@ -433,6 +510,8 @@ def default_run_state(config: dict[str, Any] | None = None) -> dict[str, Any]:
         "runner_iteration_cap": 1,
         "success_condition": "",
         "run_id": None,
+        "execution_backend": backend,
+        "execution_status": "idle",
         "remote_status": "idle",
         "last_result_summary": "",
         "next_action": "reader",
@@ -456,6 +535,7 @@ def default_watch_snapshot() -> dict[str, Any]:
         "schema_version": SCHEMA_VERSION,
         "assignment_id": "",
         "run_id": None,
+        "backend": None,
         "watch_status": "idle",
         "runner_active": False,
         "supervisor_polling": False,
@@ -690,6 +770,9 @@ def validate_watch_snapshot(data: dict[str, Any]) -> dict[str, Any]:
         if field not in data:
             raise ValueError(f"missing {field}")
     require_enum(data.get("watch_status"), WATCH_STATUS_VALUES, "watch_status")
+    backend = data.get("backend")
+    if backend is not None:
+        require_enum(backend, EXECUTION_BACKEND_VALUES, "backend")
     if not isinstance(data.get("assignment_id"), str):
         raise ValueError("assignment_id must be a string")
     local_evidence = data.get("local_evidence_paths")
@@ -727,6 +810,10 @@ def validate_run_state(data: dict[str, Any]) -> dict[str, Any]:
         if field not in data:
             raise ValueError(f"missing {field}")
     require_enum(data.get("phase"), RUN_PHASE_VALUES, "phase")
+    if "execution_backend" in data:
+        require_enum(data.get("execution_backend"), EXECUTION_BACKEND_VALUES, "execution_backend")
+    if "execution_status" in data and not isinstance(data.get("execution_status"), str):
+        raise ValueError("execution_status must be a string")
     if data.get("role_context_mode") != "isolated":
         raise ValueError("run_state.role_context_mode must be 'isolated'")
     pending = data.get("pending_human_prompt")

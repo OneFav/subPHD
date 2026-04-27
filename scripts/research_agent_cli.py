@@ -34,6 +34,7 @@ from scripts.research_loop_contract import (
     normalize_authoritative_handoff_payload,
     render_compact_summary,
     require_runtime_artifacts,
+    resolve_execution_backend,
     compute_prompt_contract_hash,
     export_omx_compat_artifacts,
     load_loop_state,
@@ -54,7 +55,7 @@ DEFAULT_ROLE_NOTES = {
     ),
     "runner": (
         "You are the RUNNER lane. You may implement or modify local code within the assignment bounds. "
-        "Smoke and formal experiments remain remote-only. "
+        "Experiment launch and watch behavior must follow the configured execution backend. "
         "You may autonomously iterate only within the current assignment bounds."
     ),
 }
@@ -92,8 +93,37 @@ def build_supervisor_template(paths_or_root, poll_seconds: int, config: dict[str
         root = Path(paths_or_root)
         from scripts.research_loop_contract import resolve_artifact_paths
         paths = resolve_artifact_paths(root, config)
+    backend = resolve_execution_backend(config if isinstance(config, dict) else {})
+    if backend == "local":
+        local = config.get("local", {}) if isinstance(config, dict) else {}
+        local_workdir = local.get("workdir") or "."
+        local_result_dir = local.get("result_dir") or "results"
+        local_log_dir = local.get("log_dir") or ".omx/logs/local-runs"
+        local_pid_dir = local.get("pid_dir") or ".omx/state/local-runs"
+        metadata_path = f"{local_pid_dir}/<run-id>.json"
+        return (
+            "Canonical local launch (write a UTF-8 command script locally, then launch it as a background process):\n"
+            "python scripts/research_supervisor.py launch "
+            "--backend local "
+            f"--local-workdir {local_workdir} "
+            f"--local-result-dir {local_result_dir} "
+            f"--local-log-dir {local_log_dir} "
+            f"--local-pid-dir {local_pid_dir} "
+            "--run-id <run-id> "
+            "--script-file <local-command-script>\n\n"
+            "Canonical local watch:\n"
+            "python scripts/research_supervisor.py watch-backend "
+            "--backend local "
+            f"--local-metadata-path {metadata_path} "
+            f"--local-result-dir {local_result_dir} "
+            "--local-glob \"*.json\" "
+            f"--poll-seconds {poll_seconds} "
+            "--max-polls 120 "
+            f"--snapshot-path {paths.watch_snapshot} "
+            f"--event-log-path {paths.watch_events}"
+        )
     remote = config.get("remote", {}) if isinstance(config, dict) else {}
-    ssh_key = remote.get("ssh_key") or "<ssh-key>"
+    ssh_key = remote.get("ssh_key") or "C:/Users/admin/Desktop/insightnet-codex/package/.subphd/keys/autoresearch_ed25519"
     host = remote.get("host") or "<remote-host>"
     port = remote.get("port", 22)
     remote_code_dir = remote.get("remote_code_dir") or "<remote-code-dir>"
@@ -131,6 +161,16 @@ def ensure_runner_remote_requirements(config: dict[str, Any]) -> None:
         raise ValueError(f"runner mode requires remote config keys: {', '.join(missing)}")
 
 
+def ensure_runner_backend_requirements(config: dict[str, Any]) -> None:
+    backend = resolve_execution_backend(config)
+    if backend == "ssh":
+        ensure_runner_remote_requirements(config)
+        return
+    local = config.get("local", {}) if isinstance(config, dict) else {}
+    if local is not None and not isinstance(local, dict):
+        raise ValueError("local config must be a table when execution.backend is local")
+
+
 def parse_role_skill_hints(agent_program_text: str, role: str) -> set[str]:
     if not agent_program_text:
         return set()
@@ -147,8 +187,14 @@ def parse_role_skill_hints(agent_program_text: str, role: str) -> set[str]:
     return selected
 
 
-def select_role_skills(role: str, run_state: dict[str, Any], agent_program_text: str) -> list[str]:
+def select_role_skills(role: str, run_state: dict[str, Any], agent_program_text: str, execution_backend: str | None = None) -> list[str]:
     selected = {BASE_ROLE_SKILLS[role]}
+    if role == "runner":
+        backend = execution_backend or run_state.get("execution_backend")
+        if backend == "local":
+            selected.update({"local-experiment", "local-watch"})
+        elif backend == "ssh":
+            selected.update({"experiment-bridge", "monitor-experiment"})
     explicit = run_state.get("active_role_skills")
     if isinstance(explicit, dict):
         explicit = explicit.get(role)
@@ -169,7 +215,10 @@ def select_role_skills(role: str, run_state: dict[str, Any], agent_program_text:
         if isinstance(prompt_text, str):
             context_parts.append(prompt_text)
     context = " ".join(context_parts).lower()
+    backend = execution_backend or run_state.get("execution_backend")
     for skill_name, keywords in ROLE_SKILL_KEYWORDS.get(role, {}).items():
+        if role == "runner" and backend == "local" and skill_name in {"experiment-bridge", "monitor-experiment"}:
+            continue
         if any(keyword in context for keyword in keywords):
             selected.add(skill_name)
     return sorted(selected)
@@ -214,6 +263,7 @@ def build_role_prompt(
     poll_seconds: int,
     report_path: str,
     supervisor_template: str,
+    execution_backend: str | None = None,
     legacy_task: str | None = None,
     authoritative_handoff: dict[str, Any] | None = None,
 ) -> str:
@@ -223,9 +273,11 @@ def build_role_prompt(
     if paths is None:
         from scripts.research_loop_contract import resolve_artifact_paths
         paths = resolve_artifact_paths(ROOT_DIR, load_project_config(ROOT_DIR))
+    explicit_backend = execution_backend or run_state.get("execution_backend")
+    effective_backend = str(explicit_backend or "ssh")
     legacy_block = f"\nLegacy request context:\n{legacy_task}\n" if legacy_task else ""
     role_root = paths.reader_role_root if role == "reader" else paths.runner_role_root
-    selected_skills = select_role_skills(role, run_state, agent_program_full)
+    selected_skills = select_role_skills(role, run_state, agent_program_full, str(explicit_backend) if explicit_backend else None)
     role_surface_block = load_role_surface(role_root, selected_skills)
     extra_role_rules = ""
     if role == "reader":
@@ -239,17 +291,30 @@ def build_role_prompt(
             "  - `next_action = \"runner\"`\n"
         )
     else:
-        extra_role_rules = (
-            "\nRunner-owned state transition:\n"
-            "- You may implement or modify local code first when the assignment requires missing code, boundary fixes, or local scaffold work.\n"
-            "- Smoke and formal experiments remain remote-only; do not run local training or local formal experiment loops.\n"
-            "- Before finishing a remote run, prune `remote_result_dir`: delete bulky intermediate or process files that do not need to be synced back.\n"
-            "- Leave only the compact core result set needed locally (for example decision, metrics, summary, manifest, and other explicitly needed artifacts).\n"
-            "- If a large artifact might matter later, summarize it in a small retained file instead of leaving the full bulky file in `remote_result_dir` by default.\n"
-            "- You own the post-run state change.\n"
-            "- If the experiment is judged successful, or `runner_iteration` has reached `runner_iteration_cap`, set `run-state.json` back to `reader`.\n"
-            "- Otherwise, set the next state needed for execution continuation (typically `watch` after a remote launch).\n"
-        )
+        if effective_backend == "local":
+            extra_role_rules = (
+                "\nRunner-owned state transition:\n"
+                "- You are in LOCAL execution mode.\n"
+                "- Do not require SSH, SCP, `remote_code_dir`, or `remote_result_dir`.\n"
+                "- Launch long experiments as local background processes through the local supervisor command in the template below.\n"
+                "- Write compact evidence to `local.result_dir` and keep `local_evidence_paths` local-only.\n"
+                "- After launch, set `run-state.json` to `phase = \"watch\"`, `next_action = \"watch\"`, `execution_backend = \"local\"`, and `execution_status = \"running\"`.\n"
+                "- If the experiment is judged successful, or `runner_iteration` has reached `runner_iteration_cap`, set `run-state.json` back to `reader`.\n"
+                "- Otherwise, set the next state needed for execution continuation, typically `watch` after a local launch.\n"
+            )
+        else:
+            extra_role_rules = (
+                "\nRunner-owned state transition:\n"
+                "- You are in SSH execution mode.\n"
+                "- You may implement or modify local code first when the assignment requires missing code, boundary fixes, or local scaffold work.\n"
+                "- Smoke and formal experiments run through the configured SSH backend.\n"
+                "- Before finishing a remote run, prune `remote_result_dir`: delete bulky intermediate or process files that do not need to be synced back.\n"
+                "- Leave only the compact core result set needed locally (for example decision, metrics, summary, manifest, and other explicitly needed artifacts).\n"
+                "- If a large artifact might matter later, summarize it in a small retained file instead of leaving the full bulky file in `remote_result_dir` by default.\n"
+                "- You own the post-run state change.\n"
+                "- If the experiment is judged successful, or `runner_iteration` has reached `runner_iteration_cap`, set `run-state.json` back to `reader`.\n"
+                "- Otherwise, set the next state needed for execution continuation, typically `watch` after a remote launch.\n"
+            )
     applied_prompt = run_state.get("applied_human_prompt")
     prompt_block = ""
     if isinstance(applied_prompt, dict) and applied_prompt.get("text"):
@@ -293,6 +358,11 @@ def build_role_prompt(
             f"- Path: {authoritative_handoff.get('path')}\n"
             f"- Payload: {json.dumps(authoritative_handoff.get('payload'), ensure_ascii=False, indent=2)}\n"
         )
+    runner_execution_requirement = (
+        "- Runner may implement or modify local code, but experiment launch/watch must follow the configured execution backend."
+        if role == "runner"
+        else "- Runner may implement or modify local code within the assignment bounds."
+    )
     return f"""Execute the current sub-PHD loop step for role={role}.
 
 ROLE NOTE:
@@ -310,10 +380,10 @@ CURRENT RUN STATE:
 Execution requirements:
 - Use the role contract above; do not violate artifact ownership.
 - Reader owns semantic handoff authoring and may edit `agent_program.md`.
-- Runner may implement or modify local code, but smoke and formal experiments remain remote-only.
+{runner_execution_requirement}
 - Reader and runner are context-isolated; continue work from artifacts, not from shared conversational memory.
 - Program sources are intentionally compact in this prompt; use the file paths + hashes below and read the files from disk when needed.
-- Use `scripts/research_supervisor.py watch` for long-running remote monitoring rather than rediscovering active runs repeatedly.
+- Use the backend-appropriate supervisor watch command for long-running monitoring rather than rediscovering active runs repeatedly.
 - Poll cadence reference: every {poll_seconds} seconds.
 - Write final role summary to: `{report_path}`.
 {authority_block}
@@ -425,12 +495,20 @@ def write_launch_metadata(
     prompt_applied: bool = False,
     observability_sidecar: Path | None = None,
     segment_id: str | None = None,
+    execution_backend: str = "ssh",
 ) -> Path:
     from scripts.research_loop_contract import atomic_write_json
     if metadata_path.suffix.lower() != ".json":
         metadata_path = metadata_path / ".omx" / "last-launch-metadata.json"
+    if execution_backend == "local":
+        canonical_transport_marker = "scripts/research_supervisor.py launch --backend local"
+        canonical_watch_marker = "scripts/research_supervisor.py watch-backend --backend local"
+    else:
+        canonical_transport_marker = "scripts/research_supervisor.py launch-bash"
+        canonical_watch_marker = "scripts/research_supervisor.py watch"
     payload = {
         "role": role,
+        "execution_backend": execution_backend,
         "prompt_contract_hash": rendered_prompt_hash,
         "rendered_prompt_hash": rendered_prompt_hash,
         "canonical_state_hash": canonical_state_hash,
@@ -442,8 +520,8 @@ def write_launch_metadata(
         "report_file": str(report_file),
         "observability_sidecar": str(observability_sidecar) if observability_sidecar else None,
         "segment_id": segment_id,
-        "canonical_transport_marker": "scripts/research_supervisor.py launch-bash",
-        "canonical_watch_marker": "scripts/research_supervisor.py watch",
+        "canonical_transport_marker": canonical_transport_marker,
+        "canonical_watch_marker": canonical_watch_marker,
         "updated_at": now_utc_iso(),
     }
     atomic_write_json(metadata_path, payload)
@@ -523,6 +601,7 @@ def main() -> int:
     model = args.model or config.get("default_model", "gpt-5.4")
     person_program_text = read_validated_text(paths.person_program, "person_program")
     agent_program_text = read_validated_text(paths.agent_program, "agent_program")
+    execution_backend = resolve_execution_backend(config)
     authoritative_handoff = None
     handoff_path_raw = loop_state.get("last_authoritative_handoff_path")
     if isinstance(handoff_path_raw, str) and handoff_path_raw:
@@ -539,7 +618,7 @@ def main() -> int:
         except Exception:
             authoritative_handoff = None
     if role == "runner":
-        ensure_runner_remote_requirements(config)
+        ensure_runner_backend_requirements(config)
         if args.task:
             raise ValueError("runner mode rejects ad-hoc local task injection; use reader-produced artifacts only")
     prompt_contract = prepare_prompt_contract(
@@ -589,6 +668,7 @@ def main() -> int:
         poll_seconds=poll_seconds,
         report_path=str(report_file),
         supervisor_template=supervisor_template,
+        execution_backend=execution_backend,
         legacy_task=args.task,
         authoritative_handoff=authoritative_handoff,
     )
@@ -644,6 +724,7 @@ def main() -> int:
         prompt_applied=bool(prompt_contract["applied_prompt"]),
         observability_sidecar=sidecar_path,
         segment_id=segment_id,
+        execution_backend=execution_backend,
     )
 
     if rendered_run_state.get("applied_human_prompt") and not args.dry_run:
@@ -711,4 +792,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

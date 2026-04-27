@@ -31,6 +31,7 @@ from scripts.research_loop_contract import (
     new_role_window_id,
     read_validated_text,
     reset_runtime_state,
+    resolve_execution_backend,
     stable_json,
     text_sha256,
 )
@@ -244,7 +245,11 @@ def resolve_authoritative_handoff(paths, loop_state: dict[str, Any]) -> tuple[di
 def advance_run_state_after_watch(run_state: dict[str, Any], snapshot: dict[str, Any]) -> dict[str, Any]:
     next_state = dict(run_state)
     status = snapshot.get("watch_status", "missing")
+    backend = snapshot.get("backend") or next_state.get("execution_backend")
+    if backend:
+        next_state["execution_backend"] = backend
     next_state["remote_status"] = status
+    next_state["execution_status"] = status
     local_evidence = snapshot.get("local_evidence_paths") or {}
     if local_evidence:
         next_state["last_result_summary"] = ", ".join(sorted(local_evidence.keys()))
@@ -266,6 +271,12 @@ def advance_run_state_after_watch(run_state: dict[str, Any], snapshot: dict[str,
     next_state["phase"] = "watch"
     next_state["next_action"] = "watch"
     return next_state
+
+
+def _resolve_config_path(root: Path, value: str | None, default: str) -> Path:
+    raw = value or default
+    path = Path(raw)
+    return path if path.is_absolute() else root / path
 
 
 def launch_role(
@@ -319,7 +330,11 @@ def launch_role(
             "prompt_contract_hash": prompt_hash,
         },
         "launch_metadata_path": str(launch_metadata_path),
-        "canonical_transport_marker": "scripts/research_supervisor.py launch-bash",
+        "canonical_transport_marker": (
+            "scripts/research_supervisor.py launch --backend local"
+            if resolve_execution_backend(config) == "local"
+            else "scripts/research_supervisor.py launch-bash"
+        ),
     })
     print(f"[autoloop] run {run_index}: role={role} resume={resume_mode} model={model} hash={prompt_hash}")
     if dry_run:
@@ -496,22 +511,41 @@ def main() -> int:
         if phase not in RUN_PHASE_VALUES:
             raise ValueError(f"invalid phase: {phase}")
 
-        snapshot = research_supervisor.watch_remote(
-            config=research_supervisor.RemoteConfig(
-                ssh_key=config.get("remote", {}).get("ssh_key", ""),
-                host=config.get("remote", {}).get("host", ""),
-                port=int(config.get("remote", {}).get("port", 22)),
-            ),
-            screen_prefixes=[run_state["run_id"]] if run_state.get("run_id") else [],
-            remote_result_dir=config.get("remote", {}).get("remote_result_dir", ""),
-            local_result_dir=local_result_dir,
-            poll_seconds=slow_heartbeat,
-            snapshot_path=paths.watch_snapshot,
-            event_log_path=paths.watch_events,
-            max_polls=1,
-            assignment_id="run-state",
-            run_id=run_state.get("run_id"),
-        )
+        backend = run_state.get("execution_backend") or resolve_execution_backend(config)
+        if backend == "local":
+            local_cfg = config.get("local", {}) if isinstance(config, dict) else {}
+            local_pid_dir = _resolve_config_path(root, local_cfg.get("pid_dir"), ".omx/state/local-runs")
+            local_result_path = _resolve_config_path(root, local_cfg.get("result_dir"), "results")
+            run_id = run_state.get("run_id")
+            metadata_path = local_pid_dir / f"{run_id}.json" if run_id else local_pid_dir / "latest.json"
+            snapshot = research_supervisor.watch_local(
+                metadata_path=metadata_path,
+                result_dir=local_result_path,
+                poll_seconds=slow_heartbeat,
+                snapshot_path=paths.watch_snapshot,
+                event_log_path=paths.watch_events,
+                max_polls=1,
+                assignment_id="run-state",
+                run_id=run_id,
+                local_glob="*.json",
+            )
+        else:
+            snapshot = research_supervisor.watch_remote(
+                config=research_supervisor.RemoteConfig(
+                    ssh_key=config.get("remote", {}).get("ssh_key", ""),
+                    host=config.get("remote", {}).get("host", ""),
+                    port=int(config.get("remote", {}).get("port", 22)),
+                ),
+                screen_prefixes=[run_state["run_id"]] if run_state.get("run_id") else [],
+                remote_result_dir=config.get("remote", {}).get("remote_result_dir", ""),
+                local_result_dir=local_result_dir,
+                poll_seconds=slow_heartbeat,
+                snapshot_path=paths.watch_snapshot,
+                event_log_path=paths.watch_events,
+                max_polls=1,
+                assignment_id="run-state",
+                run_id=run_state.get("run_id"),
+            )
         loop_state["last_watch_status"] = snapshot.get("watch_status")
         update_loop_state(paths, loop_state)
         run_state = advance_run_state_after_watch(run_state, snapshot)
