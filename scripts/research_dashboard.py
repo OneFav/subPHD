@@ -6,6 +6,7 @@ import errno
 import html
 import json
 import sys
+import urllib.parse
 import webbrowser
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -29,6 +30,64 @@ from scripts.research_loop_contract import (
 
 DASHBOARD_TITLE = "sub-PHD"
 BEIJING_TZ = timezone(timedelta(hours=8))
+
+OBSERVATORY_DATA_DEFAULTS: dict[str, Any] = {
+    "plan.json": [],
+    "agents.json": [],
+    "glossary.json": {},
+}
+
+
+def observatory_root(root: Path) -> Path:
+    return root / "files"
+
+
+def observatory_data_dir(root: Path) -> Path:
+    return observatory_root(root) / "data"
+
+
+def ensure_observatory_data_files(root: Path) -> None:
+    data_dir = observatory_data_dir(root)
+    data_dir.mkdir(parents=True, exist_ok=True)
+    legacy_dir = observatory_root(root)
+    for name, default in OBSERVATORY_DATA_DEFAULTS.items():
+        target = data_dir / name
+        if target.exists():
+            continue
+        legacy = legacy_dir / name
+        if legacy.exists():
+            target.write_text(legacy.read_text(encoding="utf-8-sig"), encoding="utf-8")
+        else:
+            target.write_text(json.dumps(default, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _write_bytes(handler: BaseHTTPRequestHandler, payload: bytes, content_type: str, status: int = 200) -> None:
+    handler.send_response(status)
+    handler.send_header("Content-Type", content_type)
+    handler.send_header("Content-Length", str(len(payload)))
+    handler.end_headers()
+    handler.wfile.write(payload)
+
+
+def _serve_observatory_file(handler: BaseHTTPRequestHandler, root: Path, request_path: str) -> bool:
+    ensure_observatory_data_files(root)
+    parsed = urllib.parse.urlparse(request_path)
+    path = parsed.path
+    if path in {"", "/"}:
+        target = observatory_root(root) / "index.html"
+        content_type = "text/html; charset=utf-8"
+    elif path.startswith("/data/"):
+        requested = path.removeprefix("/data/")
+        if "/" in requested or "\\" in requested or requested not in OBSERVATORY_DATA_DEFAULTS:
+            return False
+        target = observatory_data_dir(root) / requested
+        content_type = "application/json; charset=utf-8"
+    else:
+        return False
+    if not target.exists():
+        return False
+    _write_bytes(handler, target.read_bytes(), content_type)
+    return True
 
 
 def load_dashboard_state(observability_path: Path, run_state_path: Path) -> dict[str, Any]:
@@ -727,22 +786,13 @@ class DashboardHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # pragma: no cover
         config = load_project_config(self.root)
         paths = bootstrap_state_artifacts(self.root, config)
-        if self.path == "/api/state":
+        parsed_path = urllib.parse.urlparse(self.path).path
+        if parsed_path == "/api/state":
             self._write_json(load_dashboard_state(paths.agent_observability, paths.run_state))
             return
-        dashboard_state = load_dashboard_state(paths.agent_observability, paths.run_state)
-        html_text = build_dashboard_html(
-            rows=build_gantt_rows({"segments": dashboard_state.get("segments", [])}),
-            pending_prompt=dashboard_state.get("pending_human_prompt"),
-            last_launch_metadata=dashboard_state.get("last_applied_human_prompt"),
-            title=DASHBOARD_TITLE,
-        )
-        encoded = html_text.encode("utf-8")
-        self.send_response(200)
-        self.send_header("Content-Type", "text/html; charset=utf-8")
-        self.send_header("Content-Length", str(len(encoded)))
-        self.end_headers()
-        self.wfile.write(encoded)
+        if _serve_observatory_file(self, self.root, self.path):
+            return
+        self._write_json({"error": "not found"}, status=404)
 
     def do_POST(self) -> None:  # pragma: no cover
         if self.path != "/api/prompt":

@@ -1,0 +1,1164 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>subPHD · Agent Observatory</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,300;9..144,400;9..144,500;9..144,700&family=JetBrains+Mono:wght@400;500;600&family=Inter:wght@400;500;600&family=Noto+Serif+SC:wght@400;500;600&family=Noto+Sans+SC:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  /* ============ THEMES ============ */
+  :root, [data-theme="paper"] {
+    --bg: #f4efe6;
+    --bg-2: #ebe4d6;
+    --surface: rgba(255,255,255,.4);
+    --surface-2: rgba(255,255,255,.7);
+    --ink: #1a1815;
+    --ink-2: #4a4640;
+    --ink-3: #8a847a;
+    --rule: #d4ccbd;
+    --accent: #c8412a;
+    --accent-soft: #f0d4cd;
+    --green: #3d6b3a;
+    --amber: #b8842a;
+    --tooltip-bg: #1a1815;
+    --tooltip-fg: #f4efe6;
+    --grain-opacity: .35;
+  }
+  [data-theme="dark"] {
+    --bg: #15161a;
+    --bg-2: #1d1f24;
+    --surface: rgba(255,255,255,.025);
+    --surface-2: rgba(255,255,255,.05);
+    --ink: #e8e4dc;
+    --ink-2: #b0aaa0;
+    --ink-3: #706a62;
+    --rule: #2c2e34;
+    --accent: #e87a5d;
+    --accent-soft: rgba(232,122,93,.18);
+    --green: #7fb87c;
+    --amber: #d6a653;
+    --tooltip-bg: #2a2c32;
+    --tooltip-fg: #e8e4dc;
+    --grain-opacity: .15;
+  }
+  [data-theme="sage"] {
+    --bg: #cce8cf;
+    --bg-2: #b8dabe;
+    --surface: rgba(255,255,255,.3);
+    --surface-2: rgba(255,255,255,.55);
+    --ink: #1f2e22;
+    --ink-2: #455048;
+    --ink-3: #768078;
+    --rule: #9cc4a3;
+    --accent: #b8442a;
+    --accent-soft: rgba(184,68,42,.15);
+    --green: #2d5530;
+    --amber: #8a6420;
+    --tooltip-bg: #1f2e22;
+    --tooltip-fg: #cce8cf;
+    --grain-opacity: .25;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body {
+    background: var(--bg); color: var(--ink);
+    font-family: 'Inter', sans-serif;
+    font-size: 14px; line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+    transition: background .35s ease, color .35s ease;
+  }
+  html[data-lang="zh"] body { font-family: 'Noto Sans SC', 'Inter', sans-serif; }
+
+  body::before {
+    content: '';
+    position: fixed; inset: 0;
+    pointer-events: none;
+    opacity: var(--grain-opacity);
+    z-index: 1;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='200' height='200'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2'/><feColorMatrix values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 .04 0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");
+  }
+
+  .wrap { max-width: 1400px; margin: 0 auto; padding: 32px 40px 80px; position: relative; z-index: 2; }
+
+  header.masthead {
+    border-bottom: 2px solid var(--ink);
+    padding-bottom: 20px; margin-bottom: 32px;
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
+    align-items: end; gap: 24px;
+  }
+  .mast-left .eyebrow {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px; letter-spacing: .15em;
+    text-transform: uppercase; color: var(--ink-3); margin-bottom: 4px;
+  }
+  .mast-left .meta {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px; color: var(--ink-2);
+  }
+  .mast-title { text-align: center; }
+  .mast-title h1 {
+    font-family: 'Fraunces', 'Noto Serif SC', serif;
+    font-weight: 400; font-size: 44px; line-height: 1;
+    letter-spacing: -.02em;
+    font-variation-settings: "opsz" 144;
+  }
+  .mast-title h1 em { font-style: italic; font-weight: 300; }
+  html[data-lang="zh"] .mast-title h1 em { font-style: normal; font-weight: 500; }
+  .mast-title .subtitle {
+    font-family: 'Fraunces', 'Noto Serif SC', serif;
+    font-style: italic; font-size: 13px;
+    color: var(--ink-2); margin-top: 6px; font-weight: 300;
+  }
+  html[data-lang="zh"] .mast-title .subtitle { font-style: normal; }
+
+  .mast-right {
+    text-align: right;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px; color: var(--ink-2);
+    display: flex; flex-direction: column;
+    align-items: flex-end; gap: 8px;
+  }
+  .mast-right .controls { display: flex; gap: 6px; align-items: center; }
+  .ctl-btn {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px; letter-spacing: .05em;
+    padding: 4px 8px;
+    border: 1px solid var(--rule);
+    background: transparent; color: var(--ink-2);
+    cursor: pointer; border-radius: 2px;
+    transition: all .2s;
+  }
+  .ctl-btn:hover { border-color: var(--ink); color: var(--ink); }
+  .ctl-btn.active { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+  .ctl-group {
+    display: flex;
+    border: 1px solid var(--rule);
+    border-radius: 2px; overflow: hidden;
+  }
+  .ctl-group .ctl-btn {
+    border: none; border-right: 1px solid var(--rule);
+    border-radius: 0; padding: 4px 9px;
+  }
+  .ctl-group .ctl-btn:last-child { border-right: none; }
+
+  .live-pulse {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 4px 8px; border: 1px solid var(--ink);
+    border-radius: 2px; background: var(--bg-2);
+    text-transform: uppercase; letter-spacing: .1em; font-size: 9px;
+  }
+  .pulse-dot {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: var(--accent);
+    animation: pulse 1.6s ease-in-out infinite;
+  }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: .5; transform: scale(1.3); }
+  }
+
+  .section-head {
+    display: flex; align-items: baseline; gap: 16px;
+    margin-bottom: 20px; padding-bottom: 8px;
+    border-bottom: 1px solid var(--rule);
+  }
+  .section-num {
+    font-family: 'Fraunces', serif;
+    font-style: italic; font-weight: 300;
+    font-size: 32px; color: var(--accent); line-height: 1;
+  }
+  .section-head h2 {
+    font-family: 'Fraunces', 'Noto Serif SC', serif;
+    font-weight: 500; font-size: 22px; letter-spacing: -.01em;
+  }
+  .section-head .desc {
+    font-family: 'Fraunces', 'Noto Serif SC', serif;
+    font-style: italic; font-weight: 300;
+    color: var(--ink-3); font-size: 13px; margin-left: auto;
+  }
+  html[data-lang="zh"] .section-head .desc { font-style: normal; }
+  .section-head code, code.inline {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px; background: var(--bg-2);
+    padding: 1px 5px; border-radius: 2px;
+  }
+
+  .plan-block, .agent-block, .inbox-block { margin-bottom: 48px; }
+
+  /* PLAN */
+  .plan-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    border: 1px solid var(--rule);
+    background: var(--surface);
+  }
+  .plan-card {
+    padding: 18px 20px;
+    border-right: 1px solid var(--rule);
+    border-bottom: 1px solid var(--rule);
+    position: relative;
+    transition: background .25s ease;
+  }
+  .plan-card:hover { background: var(--surface-2); }
+  .plan-card.status-active {
+    background: linear-gradient(180deg, var(--accent-soft), transparent);
+  }
+  .plan-card.status-active::before {
+    content: ''; position: absolute;
+    left: 0; top: 0; bottom: 0; width: 3px;
+    background: var(--accent);
+  }
+  .card-header {
+    display: flex; align-items: flex-start;
+    justify-content: space-between; gap: 12px; margin-bottom: 10px;
+  }
+  .card-id {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px; color: var(--ink-3); letter-spacing: .05em;
+  }
+  .status-pill {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 9px; letter-spacing: .1em; text-transform: uppercase;
+    padding: 2px 7px; border-radius: 2px; border: 1px solid;
+    white-space: nowrap; flex-shrink: 0;
+  }
+  .status-done { color: var(--green); border-color: var(--green); background: var(--surface); }
+  .status-active { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
+  .status-pending { color: var(--ink-3); border-color: var(--rule); background: transparent; }
+  .status-blocked { color: var(--amber); border-color: var(--amber); background: var(--surface); }
+  .card-title {
+    font-family: 'Fraunces', 'Noto Serif SC', serif;
+    font-weight: 500; font-size: 17px;
+    line-height: 1.3; margin-bottom: 8px; letter-spacing: -.005em;
+  }
+  .card-note { font-size: 12.5px; color: var(--ink-2); line-height: 1.5; margin-bottom: 12px; }
+  .card-progress { display: flex; align-items: center; gap: 10px; }
+  .progress-bar { flex: 1; height: 3px; background: var(--rule); position: relative; overflow: hidden; }
+  .progress-fill {
+    position: absolute; left: 0; top: 0; bottom: 0;
+    background: var(--ink);
+    transition: width .6s cubic-bezier(.4,0,.2,1);
+  }
+  .plan-card.status-active .progress-fill { background: var(--accent); }
+  .plan-card.status-done .progress-fill { background: var(--green); }
+  .progress-num {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px; color: var(--ink-2); min-width: 32px; text-align: right;
+  }
+  .card-substeps {
+    margin-top: 12px; padding-top: 10px;
+    border-top: 1px dashed var(--rule); font-size: 11.5px;
+  }
+  .substep { display: flex; align-items: flex-start; gap: 8px; padding: 3px 0; color: var(--ink-2); }
+  .substep-mark {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px; width: 14px; flex-shrink: 0; color: var(--ink-3);
+  }
+  .substep.done .substep-mark { color: var(--green); }
+  .substep.done .substep-text { text-decoration: line-through; text-decoration-color: var(--ink-3); }
+  .substep.active .substep-mark { color: var(--accent); }
+
+  /* INBOX */
+  .inbox-bar {
+    display: flex; gap: 10px; align-items: stretch; margin-bottom: 14px;
+  }
+  .inbox-input {
+    flex: 1; background: var(--surface);
+    border: 1px solid var(--rule);
+    padding: 10px 12px;
+    font-family: inherit; font-size: 13px; color: var(--ink);
+    border-radius: 2px; resize: vertical;
+    min-height: 42px; max-height: 120px; line-height: 1.5;
+    transition: border-color .2s;
+  }
+  .inbox-input:focus { outline: none; border-color: var(--ink); }
+  .inbox-input::placeholder { color: var(--ink-3); font-style: italic; }
+  .inbox-target {
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    padding: 0 12px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px; color: var(--ink);
+    border-radius: 2px; cursor: pointer;
+  }
+  .inbox-send {
+    background: var(--ink); color: var(--bg);
+    border: none; padding: 0 18px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px; letter-spacing: .1em; text-transform: uppercase;
+    cursor: pointer; border-radius: 2px;
+    transition: opacity .2s;
+  }
+  .inbox-send:hover { opacity: .85; }
+
+  .inbox-cards {
+    display: flex; flex-wrap: wrap; gap: 10px; min-height: 0;
+  }
+  .inbox-cards:empty::before {
+    content: attr(data-empty);
+    font-family: 'Fraunces', 'Noto Serif SC', serif;
+    font-style: italic; color: var(--ink-3);
+    font-size: 12.5px; padding: 6px 2px;
+  }
+  html[data-lang="zh"] .inbox-cards:empty::before { font-style: normal; }
+  .pcard {
+    position: relative;
+    background: var(--surface-2);
+    border: 1px solid var(--rule);
+    border-left: 3px solid var(--accent);
+    padding: 10px 32px 10px 12px;
+    border-radius: 2px; max-width: 320px;
+    font-size: 12.5px; line-height: 1.5; color: var(--ink);
+    animation: cardIn .3s cubic-bezier(.4,0,.2,1);
+  }
+  .pcard.delivered { border-left-color: var(--green); opacity: .65; }
+  .pcard-target {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 9px; letter-spacing: .1em; text-transform: uppercase;
+    color: var(--ink-3); margin-bottom: 4px;
+    display: flex; justify-content: space-between;
+  }
+  .pcard-target .delivered-tag { color: var(--green); }
+  .pcard-body { color: var(--ink); white-space: pre-wrap; }
+  .pcard-del {
+    position: absolute; top: 6px; right: 8px;
+    background: none; border: none; cursor: pointer;
+    font-size: 16px; color: var(--ink-3); line-height: 1;
+    padding: 2px 4px; border-radius: 2px;
+    transition: color .15s, background .15s;
+  }
+  .pcard-del:hover { color: var(--accent); background: var(--accent-soft); }
+  @keyframes cardIn {
+    from { opacity: 0; transform: translateY(-4px) scale(.97); }
+    to { opacity: 1; transform: translateY(0) scale(1); }
+  }
+
+  /* TIMELINE */
+  .timeline-controls {
+    display: flex; align-items: center; gap: 8px;
+    margin-bottom: 20px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px; flex-wrap: wrap;
+  }
+  .filter-label {
+    color: var(--ink-3); text-transform: uppercase;
+    letter-spacing: .1em; font-size: 10px; margin-right: 4px;
+  }
+  .filter-btn {
+    padding: 5px 12px;
+    border: 1px solid var(--rule); background: transparent;
+    cursor: pointer;
+    font-family: inherit; font-size: 10px;
+    letter-spacing: .05em; text-transform: uppercase;
+    color: var(--ink-2);
+    transition: all .2s; border-radius: 2px;
+  }
+  .filter-btn:hover { border-color: var(--ink); color: var(--ink); }
+  .filter-btn.active {
+    background: var(--ink); color: var(--bg); border-color: var(--ink);
+  }
+
+  .timeline { position: relative; }
+  .timeline::before {
+    content: ''; position: absolute;
+    left: 86px; top: 0; bottom: 0;
+    width: 1px; background: var(--rule);
+  }
+  .event {
+    display: grid;
+    grid-template-columns: 80px 24px 1fr;
+    padding: 14px 0; position: relative;
+    border-bottom: 1px solid var(--rule);
+  }
+  .event:last-child { border-bottom: none; }
+  .event-time {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px; color: var(--ink-3);
+    padding-top: 3px; text-align: right; padding-right: 10px;
+  }
+  .event-marker {
+    position: relative; display: flex;
+    justify-content: center; padding-top: 4px;
+  }
+  .event-dot {
+    width: 9px; height: 9px; border-radius: 50%;
+    background: var(--bg);
+    border: 2px solid var(--ink);
+    z-index: 1; position: relative;
+  }
+  .event[data-agent="reader"] .event-dot { border-color: var(--ink); background: var(--bg); }
+  .event[data-agent="runner"] .event-dot { border-color: var(--accent); background: var(--accent-soft); }
+  .event[data-agent="system"] .event-dot { border-color: var(--ink-3); background: var(--rule); }
+
+  .event-body { padding-left: 18px; cursor: pointer; }
+  .event-head {
+    display: flex; align-items: baseline; gap: 10px;
+    margin-bottom: 4px; flex-wrap: wrap;
+  }
+  .agent-tag {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 9px; letter-spacing: .1em;
+    text-transform: uppercase;
+    padding: 1px 6px; border-radius: 2px;
+  }
+  .agent-tag.reader { background: var(--ink); color: var(--bg); }
+  .agent-tag.runner { background: var(--accent); color: #fff; }
+  .agent-tag.system { background: transparent; color: var(--ink-3); border: 1px solid var(--ink-3); }
+  .event-action {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px; color: var(--ink-2);
+  }
+  .round-tag {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 9px; letter-spacing: .05em;
+    color: var(--accent); background: var(--accent-soft);
+    padding: 1px 6px; border-radius: 2px;
+  }
+  .event-title {
+    font-family: 'Fraunces', 'Noto Serif SC', serif;
+    font-weight: 500; font-size: 15.5px;
+    line-height: 1.35; margin-top: 2px; color: var(--ink);
+  }
+  .event-summary { font-size: 12.5px; color: var(--ink-2); margin-top: 4px; line-height: 1.55; }
+  .event-detail {
+    margin-top: 10px; padding: 12px 14px;
+    background: var(--surface);
+    border-left: 2px solid var(--rule);
+    font-size: 12px; color: var(--ink-2);
+    display: none; border-radius: 0 2px 2px 0;
+  }
+  .event.expanded .event-detail { display: block; }
+  .event.expanded .expand-icon { transform: rotate(45deg); }
+  .event-detail h4 {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 9px; letter-spacing: .1em;
+    text-transform: uppercase; color: var(--ink-3);
+    margin-bottom: 4px; margin-top: 10px;
+  }
+  .event-detail h4:first-child { margin-top: 0; }
+  .event-detail pre {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px; background: var(--bg-2);
+    padding: 8px 10px; border-radius: 2px;
+    overflow-x: auto; line-height: 1.5;
+    color: var(--ink); white-space: pre-wrap;
+  }
+  .iter-list {
+    margin-top: 8px; border-left: 1px solid var(--rule); padding-left: 12px;
+  }
+  .iter-list .iter { padding: 6px 0; border-bottom: 1px dashed var(--rule); }
+  .iter-list .iter:last-child { border-bottom: none; }
+  .iter .iter-num {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 9px; color: var(--ink-3); letter-spacing: .05em;
+  }
+  .iter .iter-text { font-size: 12px; color: var(--ink-2); margin-top: 2px; }
+  .expand-icon {
+    display: inline-block;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px; color: var(--ink-3);
+    margin-left: auto; transition: transform .2s;
+  }
+
+  .term {
+    border-bottom: 1px dotted var(--accent);
+    cursor: help; color: var(--ink); font-weight: 500;
+    transition: background .2s; padding: 0 1px;
+  }
+  .term:hover { background: var(--accent-soft); }
+
+  .tooltip {
+    position: fixed; z-index: 1000; max-width: 340px;
+    background: var(--tooltip-bg); color: var(--tooltip-fg);
+    padding: 14px 16px; border-radius: 3px;
+    box-shadow: 0 8px 24px rgba(0,0,0,.18), 0 2px 4px rgba(0,0,0,.1);
+    font-size: 12.5px; line-height: 1.5;
+    pointer-events: none;
+    opacity: 0; transform: translateY(4px);
+    transition: opacity .15s, transform .15s;
+  }
+  .tooltip.visible { opacity: 1; transform: translateY(0); }
+  .tooltip .tt-term {
+    font-family: 'Fraunces', 'Noto Serif SC', serif;
+    font-weight: 500; font-size: 14px;
+    color: var(--tooltip-fg); margin-bottom: 4px; display: block;
+  }
+  .tooltip .tt-type {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 9px; letter-spacing: .1em; text-transform: uppercase;
+    color: var(--accent); margin-bottom: 8px; display: block;
+  }
+  .tooltip .tt-def { color: var(--tooltip-fg); opacity: .85; }
+  .tooltip .tt-source {
+    margin-top: 8px; padding-top: 8px;
+    border-top: 1px solid rgba(255,255,255,.15);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px; opacity: .55;
+  }
+
+  .data-source {
+    margin-top: 60px; padding-top: 20px;
+    border-top: 1px solid var(--rule);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px; color: var(--ink-3);
+    display: flex; justify-content: space-between; align-items: center;
+  }
+  .data-source code { background: var(--bg-2); padding: 2px 6px; border-radius: 2px; }
+
+  .plan-card, .event { animation: fadeUp .5s cubic-bezier(.4,0,.2,1) backwards; }
+  .plan-card:nth-child(1) { animation-delay: .05s; }
+  .plan-card:nth-child(2) { animation-delay: .12s; }
+  .plan-card:nth-child(3) { animation-delay: .19s; }
+  .plan-card:nth-child(4) { animation-delay: .26s; }
+  .plan-card:nth-child(5) { animation-delay: .33s; }
+  .plan-card:nth-child(6) { animation-delay: .40s; }
+  @keyframes fadeUp {
+    from { opacity: 0; transform: translateY(8px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  @media (max-width: 720px) {
+    .wrap { padding: 20px; }
+    header.masthead { grid-template-columns: 1fr; text-align: left; }
+    .mast-title, .mast-right { text-align: left; align-items: flex-start; }
+    .mast-title h1 { font-size: 32px; }
+    .timeline::before { left: 8px; }
+    .event { grid-template-columns: 24px 1fr; }
+    .event-time { display: none; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="masthead">
+    <div class="mast-left">
+      <div class="eyebrow" data-i18n="vol">Vol. 01 · Issue 04</div>
+      <div class="meta" id="meta-date">2026-04-28 · revised hourly</div>
+    </div>
+    <div class="mast-title">
+      <h1 data-i18n="title">The <em>subPHD</em> Observatory</h1>
+      <div class="subtitle" data-i18n="subtitle">a working log of agent activity, plans, and findings</div>
+    </div>
+    <div class="mast-right">
+      <span class="live-pulse"><span class="pulse-dot"></span> <span data-i18n="live">live</span></span>
+      <div class="controls">
+        <div class="ctl-group" id="lang-group">
+          <button class="ctl-btn" data-lang-set="en">EN</button>
+          <button class="ctl-btn" data-lang-set="zh">中</button>
+        </div>
+        <div class="ctl-group" id="theme-group">
+          <button class="ctl-btn" data-theme-set="paper" title="paper">◐</button>
+          <button class="ctl-btn" data-theme-set="dark" title="dark">●</button>
+          <button class="ctl-btn" data-theme-set="sage" title="sage">○</button>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <section class="plan-block">
+    <div class="section-head">
+      <div class="section-num">I.</div>
+      <h2 data-i18n="sec1">Plan &amp; Progress</h2>
+      <div class="desc" data-i18n="sec1desc">decomposed from <code class="inline">person_program.md</code></div>
+    </div>
+    <div class="plan-grid" id="plan-grid"></div>
+  </section>
+
+  <section class="inbox-block">
+    <div class="section-head">
+      <div class="section-num">II.</div>
+      <h2 data-i18n="sec2">Outbound Prompts</h2>
+      <div class="desc" data-i18n="sec2desc">queue an instruction; it lands in the system log once delivered</div>
+    </div>
+    <div class="inbox-bar">
+      <textarea class="inbox-input" id="inbox-input" data-i18n-attr="placeholder" data-i18n="inboxPh" placeholder="write an instruction for the next agent step…"></textarea>
+      <select class="inbox-target" id="inbox-target">
+        <option value="reader">→ reader</option>
+        <option value="runner">→ runner</option>
+        <option value="both">→ both</option>
+      </select>
+      <button class="inbox-send" id="inbox-send" data-i18n="send">queue</button>
+    </div>
+    <div class="inbox-cards" id="inbox-cards" data-empty="no pending prompts"></div>
+  </section>
+
+  <section class="agent-block">
+    <div class="section-head">
+      <div class="section-num">III.</div>
+      <h2 data-i18n="sec3">Agent Activity</h2>
+      <div class="desc" data-i18n="sec3desc">click any entry to expand reasoning &amp; output</div>
+    </div>
+    <div class="timeline-controls">
+      <span class="filter-label" data-i18n="filter">filter</span>
+      <button class="filter-btn active" data-filter="all" data-i18n="all">all</button>
+      <button class="filter-btn" data-filter="reader">reader</button>
+      <button class="filter-btn" data-filter="runner">runner</button>
+      <button class="filter-btn" data-filter="system">system</button>
+      <span class="filter-label" style="margin-left:16px;" data-i18n="rounds">runner rounds</span>
+      <button class="filter-btn active" data-rounds="last" data-i18n="last">last only</button>
+      <button class="filter-btn" data-rounds="all" data-i18n="full">full history</button>
+      <span style="margin-left:auto;color:var(--ink-3);" id="event-count"></span>
+    </div>
+    <div class="timeline" id="timeline"></div>
+  </section>
+
+  <div class="data-source">
+    <span><span data-i18n="datafiles">data files</span>: <code>plan.json</code> · <code>agents.json</code> · <code>glossary.json</code></span>
+    <span id="data-status">⌁ embedded sample data</span>
+  </div>
+</div>
+
+<div class="tooltip" id="tooltip"></div>
+
+<script>
+const I18N = {
+  en: {
+    vol: "Vol. 01 · Issue 04",
+    title: "The <em>subPHD</em> Observatory",
+    subtitle: "a working log of agent activity, plans, and findings",
+    live: "live",
+    sec1: "Plan & Progress",
+    sec1desc: 'decomposed from <code class="inline">person_program.md</code>',
+    sec2: "Outbound Prompts",
+    sec2desc: "queue an instruction; it lands in the system log once delivered",
+    sec3: "Agent Activity",
+    sec3desc: "click any entry to expand reasoning & output",
+    inboxPh: "write an instruction for the next agent step…",
+    send: "queue",
+    filter: "filter",
+    all: "all",
+    rounds: "runner rounds",
+    last: "last only",
+    full: "full history",
+    datafiles: "data files",
+    statusDone: "complete", statusActive: "in progress",
+    statusPending: "pending", statusBlocked: "blocked",
+    deliveredTag: "delivered", pendingTag: "pending",
+    iters: "iterations",
+    inboxEmpty: "no pending prompts",
+    entries: "entries",
+    embedded: "⌁ embedded sample data",
+    loaded: "● loaded from ./data/"
+  },
+  zh: {
+    vol: "第 01 卷 · 第 04 期",
+    title: "<em>subPHD</em> 观测台",
+    subtitle: "智能体活动、计划与发现的工作日志",
+    live: "实时",
+    sec1: "计划与进度",
+    sec1desc: '由 <code class="inline">person_program.md</code> 分解而来',
+    sec2: "待发送提示",
+    sec2desc: "排队一条指令；送达后将记入系统日志",
+    sec3: "智能体活动",
+    sec3desc: "点击任意条目展开推理与输出",
+    inboxPh: "为下一步 agent 操作写一条指令…",
+    send: "加入队列",
+    filter: "筛选",
+    all: "全部",
+    rounds: "runner 轮次",
+    last: "仅最近",
+    full: "完整历史",
+    datafiles: "数据文件",
+    statusDone: "已完成", statusActive: "进行中",
+    statusPending: "待开始", statusBlocked: "受阻",
+    deliveredTag: "已送达", pendingTag: "待发送",
+    iters: "次迭代",
+    inboxEmpty: "暂无待发送指令",
+    entries: "条记录",
+    embedded: "⌁ 使用内置示例数据",
+    loaded: "● 已加载 ./data/ 数据"
+  }
+};
+
+let LANG = localStorage.getItem('subphd-lang') || 'en';
+let THEME = localStorage.getItem('subphd-theme') || 'paper';
+
+function applyI18n() {
+  document.documentElement.setAttribute('lang', LANG);
+  document.documentElement.setAttribute('data-lang', LANG);
+  document.querySelectorAll('[data-i18n]').forEach(el => {
+    const key = el.dataset.i18n;
+    const attr = el.dataset.i18nAttr;
+    if (!I18N[LANG][key]) return;
+    if (attr) el.setAttribute(attr, I18N[LANG][key]);
+    else el.innerHTML = I18N[LANG][key];
+  });
+  document.getElementById('inbox-cards').setAttribute('data-empty', I18N[LANG].inboxEmpty);
+  document.querySelectorAll('[data-lang-set]').forEach(b =>
+    b.classList.toggle('active', b.dataset.langSet === LANG));
+  document.querySelectorAll('[data-theme-set]').forEach(b =>
+    b.classList.toggle('active', b.dataset.themeSet === THEME));
+}
+function applyTheme() { document.documentElement.setAttribute('data-theme', THEME); }
+
+document.getElementById('lang-group').addEventListener('click', e => {
+  const b = e.target.closest('[data-lang-set]'); if (!b) return;
+  LANG = b.dataset.langSet;
+  localStorage.setItem('subphd-lang', LANG);
+  applyI18n(); render();
+});
+document.getElementById('theme-group').addEventListener('click', e => {
+  const b = e.target.closest('[data-theme-set]'); if (!b) return;
+  THEME = b.dataset.themeSet;
+  localStorage.setItem('subphd-theme', THEME);
+  applyTheme(); applyI18n();
+});
+
+function L(v) {
+  if (v == null) return '';
+  if (typeof v === 'object' && (v.en || v.zh)) return v[LANG] || v.en || v.zh;
+  return v;
+}
+
+const SAMPLE_PLAN = [
+  {
+    id: "P1", status: "done", progress: 1.0,
+    title: { en: "Reproduce baseline results", zh: "复现基线结果" },
+    note: { en: "Re-run reference implementation on standard benchmark.",
+            zh: "在标准基准上重新运行参考实现以验证环境。" },
+    substeps: [
+      { text: { en: "Set up conda env", zh: "搭建 conda 环境" }, done: true },
+      { text: { en: "Run on <span class='term' data-term='MMLU'>MMLU</span> dev split",
+                zh: "在 <span class='term' data-term='MMLU'>MMLU</span> 验证集上运行" }, done: true },
+      { text: { en: "Match published numbers within 0.5%",
+                zh: "误差在 0.5% 以内" }, done: true }
+    ]
+  },
+  {
+    id: "P2", status: "active", progress: 0.6,
+    title: { en: "Implement <span class='term' data-term='RLAIF'>RLAIF</span> training loop",
+             zh: "实现 <span class='term' data-term='RLAIF'>RLAIF</span> 训练循环" },
+    note: { en: "Build reward model, then PPO fine-tune.",
+            zh: "构建奖励模型，然后 PPO 微调。" },
+    substeps: [
+      { text: { en: "Collect preference pairs", zh: "收集偏好对" }, done: true },
+      { text: { en: "Train reward model (R²=.81)", zh: "训练奖励模型 (R²=.81)" }, done: true },
+      { text: { en: "PPO loop with KL penalty", zh: "带 KL 惩罚的 PPO 循环" }, active: true },
+      { text: { en: "Eval on held-out test set", zh: "在留出测试集上评估" }, done: false }
+    ]
+  },
+  {
+    id: "P3", status: "active", progress: 0.25,
+    title: { en: "Ablation on <span class='term' data-term='draft_verifier'>draft-verifier</span> coupling",
+             zh: "<span class='term' data-term='draft_verifier'>draft-verifier</span> 耦合消融" },
+    note: { en: "Test whether tighter coupling improves <span class='term' data-term='speculative_decoding'>speculative decoding</span> acceptance.",
+            zh: "测试更紧耦合是否提高<span class='term' data-term='speculative_decoding'>推测解码</span>接受率。" },
+    substeps: [
+      { text: { en: "Define coupling metric", zh: "定义耦合指标" }, done: true },
+      { text: { en: "Sweep α ∈ [0,1]", zh: "扫描 α ∈ [0,1]" }, active: true },
+      { text: { en: "Plot acceptance vs α", zh: "绘制接受率 vs α 曲线" }, done: false }
+    ]
+  },
+  {
+    id: "P4", status: "pending", progress: 0,
+    title: { en: "Scaling-law fit", zh: "缩放定律拟合" },
+    note: { en: "Fit <span class='term' data-term='chinchilla'>Chinchilla-style</span> law on collected runs.",
+            zh: "在已采集运行上拟合 <span class='term' data-term='chinchilla'>Chinchilla 风格</span>定律。" },
+    substeps: [
+      { text: { en: "Aggregate run logs", zh: "聚合运行日志" }, done: false },
+      { text: { en: "Fit L(N,D)", zh: "拟合 L(N,D)" }, done: false }
+    ]
+  },
+  {
+    id: "P5", status: "blocked", progress: 0.1,
+    title: { en: "Write thesis Chapter 3", zh: "撰写论文第 3 章" },
+    note: { en: "Blocked on P3 results.", zh: "受阻于 P3 结果。" },
+    substeps: [
+      { text: { en: "Outline ready", zh: "提纲就绪" }, done: true },
+      { text: { en: "Insert P3 figures", zh: "插入 P3 图表" }, done: false },
+      { text: { en: "Discussion + limitations", zh: "讨论与局限" }, done: false }
+    ]
+  },
+  {
+    id: "P6", status: "pending", progress: 0,
+    title: { en: "Submit to NeurIPS workshop", zh: "提交 NeurIPS workshop" },
+    note: { en: "Deadline 2026-05-22.", zh: "截止日期 2026-05-22。" },
+    substeps: []
+  }
+];
+
+const SAMPLE_AGENTS = [
+  { time:"14:32", agent:"runner", action:"exec", round:"R3", roundTotal:3, roundIdx:3,
+    title:{ en:"PPO run #047 · iter 3 (final) · α=0.7", zh:"PPO 运行 #047 · 第 3 次（最终）· α=0.7" },
+    summary:{ en:"Converged. reward_mean=2.41, acceptance_rate=0.71. Round complete.",
+              zh:"收敛。reward_mean=2.41, acceptance_rate=0.71。本轮结束。" },
+    detail:{
+      command:"python train.py --alpha 0.7 --kl-coef 0.05 --steps 8000",
+      output:{ en:"reward_mean=2.41 (↑0.18 vs run #046)\nkl_div=0.043\nacceptance_rate=0.71",
+               zh:"reward_mean=2.41（较 #046 ↑0.18）\nkl_div=0.043\nacceptance_rate=0.71" }
+    },
+    iterations:[
+      { idx:1, text:{ en:"iter 1: α=0.5 → reward 2.18, unstable kl",
+                     zh:"第1次: α=0.5 → reward 2.18, kl 不稳" }},
+      { idx:2, text:{ en:"iter 2: α=0.6 → reward 2.31, kl improved",
+                     zh:"第2次: α=0.6 → reward 2.31, kl 改善" }},
+      { idx:3, text:{ en:"iter 3: α=0.7 → reward 2.41, accepted",
+                     zh:"第3次: α=0.7 → reward 2.41, 通过" }}
+    ]
+  },
+  { time:"14:18", agent:"reader", action:"synthesize",
+    title:{ en:"Read 4 papers on draft-verifier coupling",
+            zh:"阅读 4 篇关于 draft-verifier 耦合的论文" },
+    summary:{ en:"<span class='term' data-term='Leviathan2023'>Leviathan et al. 2023</span> reports diminishing returns past α≈0.75; suggests narrowing sweep.",
+              zh:"<span class='term' data-term='Leviathan2023'>Leviathan 等 2023</span> 显示 α≈0.75 后收益递减；建议收窄扫描。" },
+    detail:{
+      papers:"• Leviathan 2023\n• Chen 2024\n• Sun 2024\n• Anthropic 2025",
+      conclusion:{ en:"Hypothesis: optimal α ∈ [0.65, 0.78]. Recommend runner test 0.7.",
+                   zh:"假设最优 α ∈ [0.65, 0.78]。建议 runner 测试 0.7。" }
+    }
+  },
+  { time:"13:51", agent:"system", action:"checkpoint",
+    title:{ en:"Auto-saved P2 progress", zh:"自动保存 P2 进度" },
+    summary:{ en:"Reward checkpoint saved. P2: 0.55 → 0.60.",
+              zh:"已保存奖励模型检查点。P2: 0.55 → 0.60。" },
+    detail:{ file:"checkpoints/reward_v3.pt (412 MB)", elapsed:"2h 14m" }
+  },
+  { time:"13:44", agent:"system", action:"prompt-delivered",
+    title:{ en:"Prompt delivered to runner", zh:"指令已送达 runner" },
+    summary:{ en:'User instruction: "Try α=0.7 next, watch kl budget."',
+              zh:'用户指令："下一次试 α=0.7，注意 kl 预算。"' },
+    detail:{ source:"user inbox", target:"runner" }
+  },
+  { time:"13:40", agent:"runner", action:"exec", round:"R2", roundTotal:2, roundIdx:2,
+    title:{ en:"Coupling metric round · iter 2 (final)",
+            zh:"耦合指标第 2 次（最终）" },
+    summary:{ en:"mean=0.42, std=0.11, skew=+0.34. Long tail — investigate.",
+              zh:"均值 0.42，标准差 0.11，偏度 +0.34。长尾，需调查。" },
+    detail:{ output:"samples: 1000\nmean: 0.42\nstd: 0.11\nskew: +0.34" },
+    iterations:[
+      { idx:1, text:{ en:"iter 1: 256 samples, noisy", zh:"第1次: 256 样本，噪声大" }},
+      { idx:2, text:{ en:"iter 2: 1000 samples, stable", zh:"第2次: 1000 样本，稳定" }}
+    ]
+  },
+  { time:"13:12", agent:"reader", action:"extract",
+    title:{ en:"Extracted coupling definition from spec",
+            zh:"从规范中提取耦合定义" },
+    summary:{ en:"coupling = E[KL(p_draft || p_verify)] over 256 prompts.",
+              zh:"coupling = 在 256 提示上的 E[KL(p_draft || p_verify)]。" },
+    detail:{ source:"person_program.md §2.3" }
+  },
+  { time:"12:47", agent:"runner", action:"eval", round:"R1", roundTotal:1, roundIdx:1,
+    title:{ en:"Baseline reproduction passed", zh:"基线复现通过" },
+    summary:{ en:"<span class='term' data-term='MMLU'>MMLU</span>=67.2 (target 67.0±0.5). P1 complete.",
+              zh:"<span class='term' data-term='MMLU'>MMLU</span>=67.2（目标 67.0±0.5）。P1 完成。" },
+    detail:{ output:"MMLU: 67.2\nGSM8K: 78.1\nHumanEval: 33.5\n✓ within tolerance" }
+  },
+  { time:"12:30", agent:"system", action:"init",
+    title:{ en:"Session started", zh:"会话开始" },
+    summary:{ en:"Loaded plan from person_program.md (6 tasks, 17 substeps).",
+              zh:"从 person_program.md 加载计划（6 任务，17 子步骤）。" },
+    detail:{ config:"GPU: 4×A100 80GB\ncommit: 8a3f21d" }
+  }
+];
+
+const SAMPLE_GLOSSARY = {
+  "MMLU": {
+    type:"benchmark",
+    def:{ en:"Massive Multitask Language Understanding — 57-subject MCQ benchmark.",
+          zh:"大规模多任务语言理解——覆盖 57 个学科的多选基准。" },
+    source:"Hendrycks et al. 2021"
+  },
+  "RLAIF": {
+    type:"method",
+    def:{ en:"Reinforcement Learning from AI Feedback. Uses model-generated preferences.",
+          zh:"基于 AI 反馈的强化学习。使用模型生成的偏好替代人工标签。" },
+    source:"Bai et al. 2022"
+  },
+  "draft_verifier": {
+    type:"concept",
+    def:{ en:"A small fast 'draft' model proposes tokens; a large 'verifier' accepts or rejects.",
+          zh:"小而快的 draft 模型提出 token，大模型作为 verifier 接受或拒绝。" },
+    source:"person_program.md §2"
+  },
+  "speculative_decoding": {
+    type:"method",
+    def:{ en:"Inference acceleration: draft proposes k tokens, verifier checks in parallel. 2–3× speedup.",
+          zh:"推理加速：draft 一次提出 k 个 token，verifier 并行校验。通常 2–3× 加速。" },
+    source:"Leviathan 2023; Chen 2023"
+  },
+  "chinchilla": {
+    type:"result",
+    def:{ en:"Hoffmann 2022: compute-optimal training needs ~20 tokens per parameter.",
+          zh:"Hoffmann 2022：算力最优训练约需 20 tokens / 参数。" },
+    source:"Hoffmann et al. 2022"
+  },
+  "Leviathan2023": {
+    type:"citation",
+    def:{ en:"Fast Inference from Transformers via Speculative Decoding.",
+          zh:"通过推测解码实现 Transformer 快速推理。" },
+    source:"ICML 2023"
+  }
+};
+
+let STATE = {
+  plan: [], events: [], glossary: {},
+  inbox: [],
+  pendingPrompt: null,
+  promptError: null,
+  filter: 'all',
+  rounds: 'last'
+};
+
+async function tryLoad(path) {
+  try { const r = await fetch(path); if (!r.ok) throw 0; return await r.json(); }
+  catch { return null; }
+}
+async function loadAll() {
+  const [plan, agents, glossary, runtime] = await Promise.all([
+    tryLoad('./data/plan.json'),
+    tryLoad('./data/agents.json'),
+    tryLoad('./data/glossary.json'),
+    tryLoad('/api/state')
+  ]);
+  const usingLocal = plan && agents && glossary;
+  STATE.plan = plan || SAMPLE_PLAN;
+  STATE.events = agents || SAMPLE_AGENTS;
+  STATE.glossary = glossary || SAMPLE_GLOSSARY;
+  if (runtime && runtime.pending_human_prompt) {
+    STATE.pendingPrompt = runtime.pending_human_prompt;
+    STATE.inbox = [{
+      text: runtime.pending_human_prompt.text || '',
+      target: runtime.pending_human_prompt.target || 'next_actual_agent',
+      time: runtime.pending_human_prompt.created_at || '',
+      delivered: true,
+      ts: runtime.pending_human_prompt.prompt_sha256 || Date.now()
+    }];
+  }
+  document.getElementById('data-status').textContent =
+    usingLocal ? I18N[LANG].loaded : I18N[LANG].embedded;
+  render();
+}
+
+function statusLabel(s) {
+  return ({
+    done: I18N[LANG].statusDone,
+    active: I18N[LANG].statusActive,
+    pending: I18N[LANG].statusPending,
+    blocked: I18N[LANG].statusBlocked
+  })[s] || s;
+}
+
+function renderPlan() {
+  const grid = document.getElementById('plan-grid');
+  grid.innerHTML = STATE.plan.map(t => `
+    <div class="plan-card status-${t.status}">
+      <div class="card-header">
+        <span class="card-id">${t.id}</span>
+        <span class="status-pill status-${t.status}">${statusLabel(t.status)}</span>
+      </div>
+      <div class="card-title">${L(t.title)}</div>
+      <div class="card-note">${L(t.note)}</div>
+      <div class="card-progress">
+        <div class="progress-bar"><div class="progress-fill" style="width:${(t.progress*100).toFixed(0)}%"></div></div>
+        <div class="progress-num">${(t.progress*100).toFixed(0)}%</div>
+      </div>
+      ${t.substeps && t.substeps.length ? `
+        <div class="card-substeps">
+          ${t.substeps.map(s => `
+            <div class="substep ${s.done?'done':''} ${s.active?'active':''}">
+              <span class="substep-mark">${s.done ? '✓' : s.active ? '▸' : '○'}</span>
+              <span class="substep-text">${L(s.text)}</span>
+            </div>`).join('')}
+        </div>` : ''}
+    </div>`).join('');
+}
+
+function escapeHTML(s){ return s.replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+function renderInbox() {
+  const wrap = document.getElementById('inbox-cards');
+  wrap.innerHTML = STATE.inbox.map((p, i) => `
+    <div class="pcard ${p.delivered ? 'delivered' : ''}">
+      <div class="pcard-target">
+        <span>→ ${p.target} · ${p.time}</span>
+        <span class="${p.delivered ? 'delivered-tag' : ''}">${
+          p.delivered ? I18N[LANG].deliveredTag : I18N[LANG].pendingTag
+        }</span>
+      </div>
+      <div class="pcard-body">${escapeHTML(p.text)}</div>
+      <button class="pcard-del" data-del="${i}" title="remove">×</button>
+    </div>`).join('');
+  if (STATE.promptError) {
+    wrap.insertAdjacentHTML('afterbegin', `<div class="pcard"><div class="pcard-target"><span>error</span></div><div class="pcard-body">${escapeHTML(STATE.promptError)}</div></div>`);
+  }
+  wrap.querySelectorAll('[data-del]').forEach(b => {
+    b.addEventListener('click', () => {
+      STATE.inbox.splice(+b.dataset.del, 1);
+      saveInbox(); renderInbox();
+    });
+  });
+}
+
+function visibleEvents() {
+  let evs = STATE.events.slice();
+  if (STATE.rounds === 'last') {
+    evs = evs.filter(e => {
+      if (e.agent !== 'runner' || !e.round) return true;
+      return e.roundIdx === e.roundTotal;
+    });
+  }
+  if (STATE.filter !== 'all') evs = evs.filter(e => e.agent === STATE.filter);
+  return evs;
+}
+
+function renderTimeline() {
+  const tl = document.getElementById('timeline');
+  const evs = visibleEvents();
+  document.getElementById('event-count').textContent = `${evs.length} ${I18N[LANG].entries}`;
+
+  tl.innerHTML = evs.map(e => {
+    const detailHTML = e.detail ? Object.entries(e.detail).map(([k,v])=>`
+      <h4>${k}</h4><pre>${escapeHTML(typeof v === 'string' ? v : L(v))}</pre>
+    `).join('') : '';
+    const itersHTML = (STATE.rounds === 'all' || !e.iterations) ? '' : `
+      <h4>${e.roundTotal} ${I18N[LANG].iters} · round ${e.round}</h4>
+      <div class="iter-list">
+        ${e.iterations.map(it => `
+          <div class="iter">
+            <div class="iter-num">iter ${it.idx}</div>
+            <div class="iter-text">${L(it.text)}</div>
+          </div>`).join('')}
+      </div>`;
+    const roundTag = e.round ? `<span class="round-tag">${e.round} · ${e.roundIdx}/${e.roundTotal}</span>` : '';
+    return `
+      <div class="event" data-agent="${e.agent}">
+        <div class="event-time">${e.time}</div>
+        <div class="event-marker"><div class="event-dot"></div></div>
+        <div class="event-body">
+          <div class="event-head">
+            <span class="agent-tag ${e.agent}">${e.agent}</span>
+            <span class="event-action">${e.action}</span>
+            ${roundTag}
+            <span class="expand-icon">+</span>
+          </div>
+          <div class="event-title">${L(e.title)}</div>
+          <div class="event-summary">${L(e.summary)}</div>
+          ${(detailHTML || itersHTML) ? `<div class="event-detail">${detailHTML}${itersHTML}</div>` : ''}
+        </div>
+      </div>`;
+  }).join('');
+
+  tl.querySelectorAll('.event-body').forEach(el => {
+    el.addEventListener('click', ev => {
+      if (ev.target.classList.contains('term')) return;
+      el.parentElement.classList.toggle('expanded');
+    });
+  });
+}
+
+function render() {
+  renderPlan();
+  renderInbox();
+  renderTimeline();
+  attachTooltips();
+}
+
+function saveInbox(){ /* prompt queue is server-backed; no persistent browser-only delivery simulation */ }
+
+function addSystemPromptEvent(target, text, time) {
+  STATE.events.unshift({
+    time, agent: "system", action: "prompt-delivered",
+    title: { en:`Prompt queued for ${target}`, zh:`Prompt queued for ${target}` },
+    summary: { en:`User instruction: "${text.length>80?text.slice(0,80)+'...':text}"`,
+               zh:`User instruction: "${text.length>80?text.slice(0,80)+'...':text}"` },
+    detail: { source:"dashboard /api/prompt", target, body: text }
+  });
+}
+
+document.getElementById('inbox-send').addEventListener('click', async () => {
+  const ta = document.getElementById('inbox-input');
+  const text = ta.value.trim();
+  if (!text) return;
+  const target = document.getElementById('inbox-target').value;
+  const now = new Date();
+  const time = String(now.getHours()).padStart(2,'0')+':'+String(now.getMinutes()).padStart(2,'0');
+  const ts = Date.now();
+  const card = { text, target, time, delivered: false, ts };
+  STATE.inbox.unshift(card);
+  STATE.promptError = null;
+  ta.value = '';
+  renderInbox();
+
+  try {
+    const res = await fetch('/api/prompt', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text, target })
+    });
+    const payload = await res.json();
+    if (!res.ok) throw new Error(payload.error || 'prompt queue failed');
+    card.delivered = true;
+    STATE.pendingPrompt = payload.pending_human_prompt || { text, target };
+    addSystemPromptEvent(target, text, time);
+  } catch (err) {
+    card.delivered = false;
+    STATE.promptError = err && err.message ? err.message : String(err);
+  }
+  renderInbox(); renderTimeline(); attachTooltips();
+});
+
+document.getElementById('inbox-input').addEventListener('keydown', e => {
+  if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+    e.preventDefault();
+    document.getElementById('inbox-send').click();
+  }
+});
+
+document.querySelectorAll('[data-filter]').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('[data-filter]').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    STATE.filter = btn.dataset.filter;
+    renderTimeline(); attachTooltips();
+  });
+});
+document.querySelectorAll('[data-rounds]').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('[data-rounds]').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    STATE.rounds = btn.dataset.rounds;
+    renderTimeline(); attachTooltips();
+  });
+});
+
+const tooltip = document.getElementById('tooltip');
+function attachTooltips() {
+  document.querySelectorAll('.term').forEach(el => {
+    el.addEventListener('mouseenter', showTip);
+    el.addEventListener('mousemove', moveTip);
+    el.addEventListener('mouseleave', hideTip);
+  });
+}
+function showTip(ev) {
+  const key = ev.currentTarget.dataset.term;
+  const entry = STATE.glossary[key];
+  if (!entry) return;
+  tooltip.innerHTML = `
+    <span class="tt-term">${key.replace(/_/g,' ')}</span>
+    <span class="tt-type">${entry.type}</span>
+    <div class="tt-def">${L(entry.def)}</div>
+    ${entry.source ? `<div class="tt-source">↳ ${entry.source}</div>` : ''}
+  `;
+  tooltip.classList.add('visible');
+  moveTip(ev);
+}
+function moveTip(ev) {
+  const pad = 14;
+  const tw = tooltip.offsetWidth, th = tooltip.offsetHeight;
+  let x = ev.clientX + pad, y = ev.clientY + pad;
+  if (x + tw > window.innerWidth - 10) x = ev.clientX - tw - pad;
+  if (y + th > window.innerHeight - 10) y = ev.clientY - th - pad;
+  tooltip.style.left = x + 'px'; tooltip.style.top = y + 'px';
+}
+function hideTip(){ tooltip.classList.remove('visible'); }
+
+applyTheme();
+applyI18n();
+loadAll();
+</script>
+</body>
+</html>

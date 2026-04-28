@@ -1,0 +1,27 @@
+[
+  {
+    "id": "P1",
+    "title": "Reproduce baseline results",
+    "status": "done",
+    "progress": 1.0,
+    "note": "Re-run reference implementation on standard benchmark to verify environment.",
+    "substeps": [
+      { "text": "Set up conda env + dependencies", "done": true },
+      { "text": "Run on <span class='term' data-term='MMLU'>MMLU</span> dev split", "done": true },
+      { "text": "Match published numbers within 0.5%", "done": true }
+    ]
+  },
+  {
+    "id": "P2",
+    "title": "Implement <span class='term' data-term='RLAIF'>RLAIF</span> training loop",
+    "status": "active",
+    "progress": 0.6,
+    "note": "Build reward model from constitutional preferences, then PPO fine-tune.",
+    "substeps": [
+      { "text": "Collect preference pairs", "done": true },
+      { "text": "Train reward model (R²=.81)", "done": true },
+      { "text": "PPO loop with KL penalty", "active": true },
+      { "text": "Eval on held-out test set", "done": false }
+    ]
+  }
+]

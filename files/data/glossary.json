@@ -1,0 +1,17 @@
+{
+  "MMLU": {
+    "type": "benchmark",
+    "def": "Massive Multitask Language Understanding — 57-subject multiple-choice benchmark.",
+    "source": "Hendrycks et al. 2021"
+  },
+  "RLAIF": {
+    "type": "method",
+    "def": "Reinforcement Learning from AI Feedback. Uses model-generated preferences instead of human labels.",
+    "source": "Bai et al. 2022"
+  },
+  "draft_verifier": {
+    "type": "concept",
+    "def": "A small fast 'draft' model proposes tokens; a large 'verifier' accepts or rejects them.",
+    "source": "person_program.md §2"
+  }
+}

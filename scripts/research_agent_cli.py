@@ -315,6 +315,19 @@ def build_role_prompt(
                 "- If the experiment is judged successful, or `runner_iteration` has reached `runner_iteration_cap`, set `run-state.json` back to `reader`.\n"
                 "- Otherwise, set the next state needed for execution continuation, typically `watch` after a remote launch.\n"
             )
+    observatory_rules = (
+        "\nObservatory dashboard data maintenance (required before finishing this turn):\n"
+        "- Directly maintain the static dashboard data files when your turn changes the research state:\n"
+        "  - `files/data/plan.json` for Plan & Progress cards.\n"
+        "  - `files/data/agents.json` for reader/runner/system activity events.\n"
+        "  - `files/data/glossary.json` for concepts, methods, benchmarks, artifacts, and sources.\n"
+        "- Reader and runner may update all three Observatory JSON files; keep prior useful history and append activity events instead of replacing the log.\n"
+        "- Keep the files valid UTF-8 JSON matching the existing `files/index.html` contract. If a file is missing, create a minimal valid default (`[]` for plan/agents, `{}` for glossary).\n"
+        "- Do not stream or expose full internal chain-of-thought. Write concise public summaries, evidence, outputs, blockers, decisions, and next actions only.\n"
+        "- The dashboard's Outbound Prompts panel is backed by `/api/prompt`; do not replace it with browser-only/localStorage delivery logic.\n"
+    )
+    extra_role_rules += observatory_rules
+
     applied_prompt = run_state.get("applied_human_prompt")
     prompt_block = ""
     if isinstance(applied_prompt, dict) and applied_prompt.get("text"):
