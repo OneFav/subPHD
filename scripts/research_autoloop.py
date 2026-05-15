@@ -266,34 +266,6 @@ def main() -> int:
             print(f"Stopping: terminal phase {phase}.")
             return 0
 
-        # --- Evaluate structured success_condition ---
-        sprint_contract = task_state.get("sprint_contract")
-        if isinstance(sprint_contract, dict):
-            sc = sprint_contract.get("success_condition")
-            if isinstance(sc, dict):
-                satisfied, details = evaluate_success_condition(sc, task_state)
-                if satisfied:
-                    task_state["phase"] = "done"
-                    task_state["next_action"] = "done"
-                    task_state["runner_done_reason"] = f"success_condition_satisfied: {details}"
-                    task_state["updated_at"] = now_utc_iso()
-                    atomic_write_json(paths.task_state, task_state)
-                    append_jsonl(loop_log, {"time": int(time.time()), "event": "stop", "reason": "success_condition_satisfied", "details": details})
-                    print(f"Stopping: success condition satisfied — {details}")
-                    return 0
-
-            # --- Check failure_policy ---
-            fp = sprint_contract.get("failure_policy") or {}
-            no_imp_cap = int(fp.get("no_improvement_cap", 0))
-            if no_imp_cap > 0 and int(task_state.get("no_improvement_count", 0)) >= no_imp_cap:
-                task_state["phase"] = "abandoned"
-                task_state["next_action"] = "abandoned"
-                task_state["runner_done_reason"] = "no_improvement_cap_exhausted"
-                task_state["updated_at"] = now_utc_iso()
-                atomic_write_json(paths.task_state, task_state)
-                append_jsonl(loop_log, {"time": int(time.time()), "event": "stop", "reason": "no_improvement_cap_exhausted"})
-                print("Stopping: no improvement cap exhausted.")
-                return 0
 
         # --- Promote pending human prompt at safe point ---
         pending = task_state.get("pending_human_prompt")
@@ -418,6 +390,40 @@ def main() -> int:
                     max_polls=1, assignment_id="run-state", run_id=task_state.get("run_id"),
                 )
             task_state = advance_run_state_after_watch(task_state, snapshot, repair_cap=repair_cap)
+
+            # --- After watch: evaluate sprint contract ---
+            # Only finalize the sprint when runner cap is exhausted (phase=reader)
+            # or when the sprint has been abandoned. While cap remains, runner
+            # continues iterating even if artifacts already exist.
+            post_phase = task_state.get("phase")
+            sprint_contract = task_state.get("sprint_contract")
+            if isinstance(sprint_contract, dict) and post_phase == "reader":
+                sc = sprint_contract.get("success_condition")
+                if isinstance(sc, dict):
+                    satisfied, details = evaluate_success_condition(sc, task_state)
+                    if satisfied:
+                        task_state["phase"] = "done"
+                        task_state["next_action"] = "done"
+                        task_state["runner_done_reason"] = f"success_condition_satisfied: {details}"
+                        task_state["updated_at"] = now_utc_iso()
+                        update_task_state(paths, task_state)
+                        append_jsonl(loop_log, {"time": int(time.time()), "event": "sprint_success", "reason": "success_condition_satisfied", "details": details})
+                        print(f"[autoloop] Sprint success (cap {task_state.get('runner_iteration')}/{task_state.get('runner_iteration_cap')}) — {details}")
+                        continue
+
+                # Cap exhausted, success not met — check failure_policy
+                fp = sprint_contract.get("failure_policy") or {}
+                no_imp_cap = int(fp.get("no_improvement_cap", 0))
+                if no_imp_cap > 0 and int(task_state.get("no_improvement_count", 0)) >= no_imp_cap:
+                    task_state["phase"] = "abandoned"
+                    task_state["next_action"] = "abandoned"
+                    task_state["runner_done_reason"] = "no_improvement_cap_exhausted"
+                    task_state["updated_at"] = now_utc_iso()
+                    update_task_state(paths, task_state)
+                    append_jsonl(loop_log, {"time": int(time.time()), "event": "sprint_abandoned", "reason": "no_improvement_cap_exhausted"})
+                    print("[autoloop] Sprint abandoned: no improvement cap exhausted.")
+                    continue
+
             update_task_state(paths, task_state)
             append_jsonl(loop_log, {
                 "time": int(time.time()), "event": "watch_phase_transition",
