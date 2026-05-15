@@ -167,11 +167,19 @@ ai_worklog = ".omx/logs/ai-worklog.md"
         result = normalize_post_role_run_state("runner", state)
         self.assertEqual(result["phase"], "runner")
 
-    def test_normalize_runner_respects_terminal_phase(self):
+    def test_normalize_runner_must_not_declare_done_or_abandoned(self):
         from scripts.research_agent_cli import normalize_post_role_run_state
-        state = {"phase": "done", "next_action": "done", "runner_iteration": 3, "runner_iteration_cap": 4}
+        for phase in ("done", "abandoned"):
+            state = {"phase": phase, "next_action": phase, "runner_iteration": 3, "runner_iteration_cap": 4}
+            result = normalize_post_role_run_state("runner", state)
+            self.assertEqual(result["phase"], "reader",
+                             f"runner setting phase={phase} must be overridden to reader")
+
+    def test_normalize_runner_respects_needs_human(self):
+        from scripts.research_agent_cli import normalize_post_role_run_state
+        state = {"phase": "needs_human", "next_action": "needs_human", "runner_iteration": 3, "runner_iteration_cap": 4}
         result = normalize_post_role_run_state("runner", state)
-        self.assertEqual(result["phase"], "done")
+        self.assertEqual(result["phase"], "needs_human")
 
     def test_normalize_runner_goes_reader_when_cap_exhausted(self):
         from scripts.research_agent_cli import normalize_post_role_run_state

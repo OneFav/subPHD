@@ -113,7 +113,7 @@ def build_supervisor_template(paths_or_root, poll_seconds: int, config: dict[str
             f"--event-log-path {paths.watch_events}"
         )
     remote = config.get("remote", {}) if isinstance(config, dict) else {}
-    ssh_key = remote.get("ssh_key") or "~/.ssh/id_rsa"
+    ssh_key = remote.get("ssh_key") or "C:/Users/admin/Desktop/insightnet-codex/package/.subphd/keys/autoresearch_ed25519"
     host = remote.get("host") or "<remote-host>"
     port = remote.get("port", 22)
     remote_code_dir = remote.get("remote_code_dir") or "<remote-code-dir>"
@@ -500,8 +500,13 @@ def normalize_post_role_run_state(role: str, task_state: dict[str, Any]) -> dict
     runner_phase = normalized.get("phase")
     runner_next = normalized.get("next_action")
 
-    # Terminal phases: always respect
-    if runner_phase in {"done", "abandoned", "needs_human"}:
+    # Runner must NOT declare sprint done/abandoned — autoloop decides.
+    # Only "needs_human" passes through directly.
+    if runner_phase == "needs_human":
+        return normalized
+    if runner_phase in {"done", "abandoned"}:
+        normalized["phase"] = "reader"
+        normalized["next_action"] = "reader"
         return normalized
 
     # Runner explicitly wants watch — respect it
