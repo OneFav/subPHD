@@ -355,6 +355,14 @@ def poll_remote(
         screen_output = ssh_output(config, "screen -ls || true", timeout=timeout)
         all_screens = parse_screen_ls(screen_output)
         matched = [name for name in all_screens if not screen_prefixes or any(name.startswith(prefix) for prefix in screen_prefixes)]
+        active_listing = ssh_output(config, f"ls -1 {shlex.quote(result_dir)}/*.active 2>/dev/null || true", timeout=timeout)
+        remote_active_markers = [line.strip() for line in active_listing.splitlines() if line.strip()]
+        active_marker_names = [Path(marker).name for marker in remote_active_markers]
+        matched_active_markers = [
+            name for name in active_marker_names
+            if not screen_prefixes or any(name.startswith(prefix) for prefix in screen_prefixes)
+        ]
+        runner_active = len(matched) > 0 or len(matched_active_markers) > 0
         gpu_output = ssh_output(
             config,
             "nvidia-smi --query-gpu=index,memory.used,utilization.gpu --format=csv,noheader || true",
@@ -365,10 +373,10 @@ def poll_remote(
         snapshot = build_watch_snapshot(
             assignment_id=assignment_id,
             run_id=run_id,
-            watch_status=classify_watch_status(active=len(matched) > 0, remote_jsons=remote_jsons, local_evidence_paths=None),
-            runner_active=len(matched) > 0,
+            watch_status=classify_watch_status(active=runner_active, remote_jsons=remote_jsons, local_evidence_paths=None),
+            runner_active=runner_active,
             supervisor_polling=True,
-            remote_screen_names=matched,
+            remote_screen_names=matched + matched_active_markers,
             remote_jsons=remote_jsons,
             local_evidence_paths=None,
             failure_reason=None,

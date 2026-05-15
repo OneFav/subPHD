@@ -52,7 +52,7 @@ slow_heartbeat_seconds = 1
             paths = bootstrap_state_artifacts(root, config)
 
             call_roles: list[tuple[str, str]] = []
-            run_state_path = paths.run_state
+            run_state_path = paths.task_state
             reader_counter = {"value": 0}
             runner_counter = {"value": 0}
             poll_counter = {"value": 0}
@@ -65,9 +65,6 @@ slow_heartbeat_seconds = 1
                 if role == "reader":
                     reader_counter["value"] += 1
                     run_state["reader_iteration"] = reader_counter["value"]
-                    run_state["reader_iteration_cap"] = 4
-                    run_state["runner_iteration"] = 0
-                    run_state["runner_iteration_cap"] = 2
                     run_state["current_objective"] = f"objective-{reader_counter['value']}"
                     run_state["success_condition"] = "remote sync completes"
                     run_state["phase"] = "runner"
@@ -121,10 +118,10 @@ slow_heartbeat_seconds = 1
             self.assertGreaterEqual(runner_counter["value"], 2)
             self.assertTrue(all(resume_mode in {"fresh", "resume_same_role"} for _, resume_mode in call_roles))
             self.assertEqual(call_roles[0][1], "fresh")
-            final_state = read_json(paths.run_state)
+            final_state = read_json(paths.task_state)
             self.assertGreaterEqual(final_state["reader_iteration"], 2)
             self.assertGreaterEqual(final_state["runner_iteration"], 1)
-            self.assertEqual(final_state["role_context_mode"], "isolated")
+            self.assertIn("window_role", final_state)
             snapshot = read_json(paths.watch_snapshot)
             self.assertEqual(snapshot["watch_status"], "synced")
             self.assertIsNotNone(snapshot["local_evidence_paths"])

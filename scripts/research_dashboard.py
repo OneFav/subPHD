@@ -20,12 +20,12 @@ if str(ROOT_DIR) not in sys.path:
 
 from scripts.research_agent_cli import load_project_config
 from scripts.research_loop_contract import (
+    atomic_write_json,
     bootstrap_state_artifacts,
-    load_agent_observability,
-    load_run_state,
-    overlay_observability_sidecars,
+    load_task_state,
+    now_utc_iso,
     read_json,
-    write_pending_human_prompt,
+    text_sha256,
 )
 
 DASHBOARD_TITLE = "sub-PHD"
@@ -90,45 +90,112 @@ def _serve_observatory_file(handler: BaseHTTPRequestHandler, root: Path, request
     return True
 
 
-def load_dashboard_state(observability_path: Path, run_state_path: Path) -> dict[str, Any]:
+def _read_autoloop_segments(autoloop_root: Path) -> list[dict[str, Any]]:
+    """Derive timeline segments from autoloop JSONL logs (actual state, not a sidecar)."""
+    segments: list[dict[str, Any]] = []
+    if not autoloop_root.exists():
+        return segments
+    jsonl_files = sorted(autoloop_root.glob("research-autoloop-*.jsonl"))
+    if not jsonl_files:
+        return segments
+    latest = jsonl_files[-1]
+    launches: dict[int, dict[str, Any]] = {}
     try:
-        observability = load_agent_observability(observability_path)
+        for line in latest.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            entry = json.loads(line)
+            run_index = entry.get("run_index")
+            event = entry.get("event", "")
+            if event == "launch" and run_index is not None:
+                launches[run_index] = {
+                    "role": entry.get("role", ""),
+                    "started_at": _ts_to_iso(entry.get("time")),
+                    "ended_at": None,
+                    "status": "running",
+                    "task": "",
+                    "expected_output": "",
+                    "why": "",
+                    "completion_summary": "",
+                }
+            elif event == "completed" and run_index is not None:
+                seg = launches.get(run_index, {})
+                seg["ended_at"] = _ts_to_iso(entry.get("time"))
+                seg["status"] = "completed"
+                launches[run_index] = seg
+            elif event == "watch_phase_transition" and run_index is not None:
+                seg = launches.get(run_index, {})
+                seg["completion_summary"] = f"watch: {entry.get('watch_status', '')}"
+                launches[run_index] = seg
+            elif event == "auto_advance":
+                segments.append({
+                    "role": "system",
+                    "task": "Auto-advance to next sprint",
+                    "started_at": _ts_to_iso(entry.get("time")),
+                    "ended_at": _ts_to_iso(entry.get("time")),
+                    "status": "completed",
+                    "expected_output": "",
+                    "why": entry.get("reason", ""),
+                    "completion_summary": "",
+                })
     except Exception:
-        observability = read_json(observability_path) if observability_path.exists() else {"segments": []}
-    observability = overlay_observability_sidecars(observability)
-    try:
-        run_state = load_run_state(run_state_path)
-    except Exception:
-        run_state = read_json(run_state_path) if run_state_path.exists() else {}
+        pass
+    for run_index in sorted(launches):
+        seg = launches[run_index]
+        segments.append(seg)
+    return segments
+
+
+def _ts_to_iso(ts: int | float | None) -> str:
+    if ts is None:
+        return ""
+    return datetime.fromtimestamp(int(ts), tz=timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def load_dashboard_state(paths: Any, task_state_path: Path) -> dict[str, Any]:
+    task_state = load_task_state(task_state_path)
+    segments = _read_autoloop_segments(paths.autoloop_root)
+    sprint = task_state.get("sprint_contract") or {}
     return {
-        "segments": observability.get("segments", []),
-        "pending_human_prompt": run_state.get("pending_human_prompt"),
-        "last_applied_human_prompt": run_state.get("last_applied_human_prompt"),
-        "phase": run_state.get("phase"),
-        "next_action": run_state.get("next_action"),
-        "reader_iteration": run_state.get("reader_iteration"),
-        "reader_iteration_cap": run_state.get("reader_iteration_cap"),
-        "runner_iteration": run_state.get("runner_iteration"),
-        "runner_iteration_cap": run_state.get("runner_iteration_cap"),
+        "segments": segments,
+        "pending_human_prompt": task_state.get("pending_human_prompt"),
+        "applied_human_prompt": task_state.get("applied_human_prompt"),
+        "phase": task_state.get("phase"),
+        "next_action": task_state.get("next_action"),
+        "reader_iteration": task_state.get("reader_iteration"),
+        "reader_iteration_cap": task_state.get("reader_iteration_cap"),
+        "runner_iteration": task_state.get("runner_iteration"),
+        "runner_iteration_cap": task_state.get("runner_iteration_cap"),
+        "repair_count": task_state.get("repair_count"),
+        "no_improvement_count": task_state.get("no_improvement_count"),
+        "remote_status": task_state.get("remote_status"),
+        "run_id": task_state.get("run_id"),
+        "execution_backend": task_state.get("execution_backend"),
+        "last_error": task_state.get("last_error"),
+        "runner_done_reason": task_state.get("runner_done_reason"),
+        "sprint_id": sprint.get("sprint_id"),
+        "research_question": sprint.get("research_question"),
+        "budget": sprint.get("budget"),
+        "metrics": sprint.get("metrics"),
     }
 
 
-def build_gantt_rows(observability: dict[str, Any]) -> list[dict[str, Any]]:
+def build_gantt_rows(state: dict[str, Any]) -> list[dict[str, Any]]:
+    """Build display rows from dashboard state (backward-compatible signature)."""
     rows: list[dict[str, Any]] = []
-    for segment in observability.get("segments", []):
-        rows.append(
-            {
-                "role": segment.get("role", ""),
-                "task": segment.get("task", ""),
-                "started_at": segment.get("started_at", ""),
-                "ended_at": segment.get("ended_at"),
-                "eta": segment.get("eta", ""),
-                "expected_output": segment.get("expected_output", ""),
-                "why": segment.get("why", ""),
-                "status": segment.get("status", ""),
-                "completion_summary": segment.get("completion_summary", ""),
-            }
-        )
+    for segment in state.get("segments", []):
+        rows.append({
+            "role": segment.get("role", ""),
+            "task": segment.get("task", ""),
+            "started_at": segment.get("started_at", ""),
+            "ended_at": segment.get("ended_at"),
+            "eta": segment.get("eta", ""),
+            "expected_output": segment.get("expected_output", ""),
+            "why": segment.get("why", ""),
+            "status": segment.get("status", ""),
+            "completion_summary": segment.get("completion_summary", ""),
+        })
     return rows
 
 
@@ -769,7 +836,20 @@ def render_dashboard_html(state: dict[str, Any], title: str = DASHBOARD_TITLE) -
 def queue_one_time_prompt(root: Path, *, target: str, text: str, created_by: str = "dashboard") -> dict[str, Any]:
     config = load_project_config(root)
     paths = bootstrap_state_artifacts(root, config)
-    return write_pending_human_prompt(paths.run_state, target=target, text=text, created_by=created_by)
+    task_state = load_task_state(paths.task_state)
+    task_state["pending_human_prompt"] = {
+        "target": target,
+        "text": text.strip(),
+        "created_at": now_utc_iso(),
+        "created_by": created_by,
+        "prompt_sha256": text_sha256(text.strip()),
+    }
+    if target == "force_reader":
+        task_state["phase"] = "reader"
+        task_state["next_action"] = "reader"
+    task_state["updated_at"] = now_utc_iso()
+    atomic_write_json(paths.task_state, task_state)
+    return task_state
 
 
 class DashboardHandler(BaseHTTPRequestHandler):
@@ -788,7 +868,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
         paths = bootstrap_state_artifacts(self.root, config)
         parsed_path = urllib.parse.urlparse(self.path).path
         if parsed_path == "/api/state":
-            self._write_json(load_dashboard_state(paths.agent_observability, paths.run_state))
+            self._write_json(load_dashboard_state(paths, paths.task_state))
             return
         if _serve_observatory_file(self, self.root, self.path):
             return

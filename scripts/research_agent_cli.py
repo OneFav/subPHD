@@ -25,27 +25,17 @@ except ImportError:  # pragma: no cover
 
 from scripts.research_loop_contract import (
     ROLE_VALUES,
-    build_prompt_contract_assignment,
     RESUME_MODE_VALUES,
     append_ai_worklog_entry,
     compact_text_summary,
-    compute_rendered_prompt_contract_hash,
-    load_authoritative_handoff_payload,
-    normalize_authoritative_handoff_payload,
+    compute_prompt_contract_hash,
+    load_task_state,
+    now_utc_iso,
+    read_validated_text,
     render_compact_summary,
     require_runtime_artifacts,
     resolve_execution_backend,
-    compute_prompt_contract_hash,
-    export_omx_compat_artifacts,
-    load_loop_state,
-    load_run_state,
-    merge_observability_sidecar,
-    now_utc_iso,
-    read_validated_text,
-    sanitize_run_state_for_role,
     text_sha256,
-    upsert_observability_segment,
-    validate_resume_request,
 )
 
 DEFAULT_ROLE_NOTES = {
@@ -123,7 +113,7 @@ def build_supervisor_template(paths_or_root, poll_seconds: int, config: dict[str
             f"--event-log-path {paths.watch_events}"
         )
     remote = config.get("remote", {}) if isinstance(config, dict) else {}
-    ssh_key = remote.get("ssh_key") or "C:/Users/admin/Desktop/insightnet-codex/package/.subphd/keys/autoresearch_ed25519"
+    ssh_key = remote.get("ssh_key") or "~/.ssh/id_rsa"
     host = remote.get("host") or "<remote-host>"
     port = remote.get("port", 22)
     remote_code_dir = remote.get("remote_code_dir") or "<remote-code-dir>"
@@ -187,15 +177,15 @@ def parse_role_skill_hints(agent_program_text: str, role: str) -> set[str]:
     return selected
 
 
-def select_role_skills(role: str, run_state: dict[str, Any], agent_program_text: str, execution_backend: str | None = None) -> list[str]:
+def select_role_skills(role: str, task_state: dict[str, Any], agent_program_text: str, execution_backend: str | None = None) -> list[str]:
     selected = {BASE_ROLE_SKILLS[role]}
     if role == "runner":
-        backend = execution_backend or run_state.get("execution_backend")
+        backend = execution_backend or task_state.get("execution_backend")
         if backend == "local":
             selected.update({"local-experiment", "local-watch"})
         elif backend == "ssh":
             selected.update({"experiment-bridge", "monitor-experiment"})
-    explicit = run_state.get("active_role_skills")
+    explicit = task_state.get("active_role_skills")
     if isinstance(explicit, dict):
         explicit = explicit.get(role)
     if isinstance(explicit, list):
@@ -206,16 +196,16 @@ def select_role_skills(role: str, run_state: dict[str, Any], agent_program_text:
 
     context_parts = [agent_program_text]
     for key in ("current_objective", "next_action", "success_condition", "remote_status"):
-        value = run_state.get(key)
+        value = task_state.get(key)
         if isinstance(value, str):
             context_parts.append(value)
-    pending_prompt = run_state.get("applied_human_prompt") or run_state.get("pending_human_prompt")
+    pending_prompt = task_state.get("applied_human_prompt") or task_state.get("pending_human_prompt")
     if isinstance(pending_prompt, dict):
         prompt_text = pending_prompt.get("text")
         if isinstance(prompt_text, str):
             context_parts.append(prompt_text)
     context = " ".join(context_parts).lower()
-    backend = execution_backend or run_state.get("execution_backend")
+    backend = execution_backend or task_state.get("execution_backend")
     for skill_name, keywords in ROLE_SKILL_KEYWORDS.get(role, {}).items():
         if role == "runner" and backend == "local" and skill_name in {"experiment-bridge", "monitor-experiment"}:
             continue
@@ -243,7 +233,7 @@ def build_runtime_whitelist(paths) -> list[str]:
     return [
         str(paths.person_program),
         str(paths.agent_program),
-        str(paths.run_state),
+        str(paths.task_state),
         str(paths.ai_worklog),
         str(paths.reports_root / "*"),
         str(paths.synced_results_root / "*"),
@@ -259,13 +249,12 @@ def build_role_prompt(
     agent_program: str,
     person_program_full: str,
     agent_program_full: str,
-    run_state: dict[str, Any],
+    task_state: dict[str, Any],
     poll_seconds: int,
     report_path: str,
     supervisor_template: str,
     execution_backend: str | None = None,
     legacy_task: str | None = None,
-    authoritative_handoff: dict[str, Any] | None = None,
 ) -> str:
     role = role.strip().lower()
     if role not in ROLE_VALUES:
@@ -273,11 +262,11 @@ def build_role_prompt(
     if paths is None:
         from scripts.research_loop_contract import resolve_artifact_paths
         paths = resolve_artifact_paths(ROOT_DIR, load_project_config(ROOT_DIR))
-    explicit_backend = execution_backend or run_state.get("execution_backend")
+    explicit_backend = execution_backend or task_state.get("execution_backend")
     effective_backend = str(explicit_backend or "ssh")
     legacy_block = f"\nLegacy request context:\n{legacy_task}\n" if legacy_task else ""
     role_root = paths.reader_role_root if role == "reader" else paths.runner_role_root
-    selected_skills = select_role_skills(role, run_state, agent_program_full, str(explicit_backend) if explicit_backend else None)
+    selected_skills = select_role_skills(role, task_state, agent_program_full, str(explicit_backend) if explicit_backend else None)
     role_surface_block = load_role_surface(role_root, selected_skills)
     extra_role_rules = ""
     if role == "reader":
@@ -286,7 +275,7 @@ def build_role_prompt(
             "\nReader read whitelist:\n"
             f"{whitelist}\n"
             "- Stay inside this whitelist first; only broaden reads when the current step cannot be completed from these files.\n"
-            "- At the end of the reader turn, hardcode `run-state.json` to hand off to `runner` by setting:\n"
+            "- At the end of the reader turn, hardcode `task-state.json` to hand off to `runner` by setting:\n"
             "  - `phase = \"runner\"`\n"
             "  - `next_action = \"runner\"`\n"
         )
@@ -298,8 +287,8 @@ def build_role_prompt(
                 "- Do not require SSH, SCP, `remote_code_dir`, or `remote_result_dir`.\n"
                 "- Launch long experiments as local background processes through the local supervisor command in the template below.\n"
                 "- Write compact evidence to `local.result_dir` and keep `local_evidence_paths` local-only.\n"
-                "- After launch, set `run-state.json` to `phase = \"watch\"`, `next_action = \"watch\"`, `execution_backend = \"local\"`, and `execution_status = \"running\"`.\n"
-                "- If the experiment is judged successful, or `runner_iteration` has reached `runner_iteration_cap`, set `run-state.json` back to `reader`.\n"
+                "- After launch, set `task-state.json` to `phase = \"watch\"`, `next_action = \"watch\"`, `execution_backend = \"local\"`, and `execution_status = \"running\"`.\n"
+                "- If the experiment is judged successful, or `runner_iteration` has reached `runner_iteration_cap`, set `task-state.json` back to `reader`.\n"
                 "- Otherwise, set the next state needed for execution continuation, typically `watch` after a local launch.\n"
             )
         else:
@@ -312,7 +301,7 @@ def build_role_prompt(
                 "- Leave only the compact core result set needed locally (for example decision, metrics, summary, manifest, and other explicitly needed artifacts).\n"
                 "- If a large artifact might matter later, summarize it in a small retained file instead of leaving the full bulky file in `remote_result_dir` by default.\n"
                 "- You own the post-run state change.\n"
-                "- If the experiment is judged successful, or `runner_iteration` has reached `runner_iteration_cap`, set `run-state.json` back to `reader`.\n"
+                "- If the experiment is judged successful, or `runner_iteration` has reached `runner_iteration_cap`, set `task-state.json` back to `reader`.\n"
                 "- Otherwise, set the next state needed for execution continuation, typically `watch` after a remote launch.\n"
             )
     observatory_rules = (
@@ -328,7 +317,7 @@ def build_role_prompt(
     )
     extra_role_rules += observatory_rules
 
-    applied_prompt = run_state.get("applied_human_prompt")
+    applied_prompt = task_state.get("applied_human_prompt") or task_state.get("pending_human_prompt")
     prompt_block = ""
     if isinstance(applied_prompt, dict) and applied_prompt.get("text"):
         prompt_block = (
@@ -336,40 +325,6 @@ def build_role_prompt(
             f"- Target: {applied_prompt.get('target')}\n"
             f"- Instruction: {applied_prompt.get('text')}\n"
             "- This instruction is one-shot and applies only to the current invocation.\n"
-        )
-    observability_block = ""
-    sidecar_path = run_state.get("observability_sidecar_path")
-    segment_id = run_state.get("observability_segment_id")
-    if sidecar_path and segment_id:
-        observability_block = (
-            "\nObservability JSON sidecar:\n"
-            f"- Segment id: {segment_id}\n"
-            f"- Write/update JSON at: `{sidecar_path}`\n"
-            "- Write/update JSON twice for this invocation.\n"
-            "- Write #1 immediately at start with: segment_id, role, task, started_at, why, expected_output, status='running', updated_at.\n"
-            "- Write #2 before exit to update the same JSON with: status, completion_summary, ended_at, updated_at. Keep the start fields intact.\n"
-            "- Optional field: eta. Optional field: status_note.\n"
-            "- Use plain language that a human can understand quickly.\n"
-            "- Do not write vague filler such as 'the process requires this', 'advance the workflow', 'complete the current stage', or other template-like explanations.\n"
-            "- For `expected_output`, name the concrete experiment, code change, check, artifact, file, or decision the human will get from this turn.\n"
-            "- For `why`, name the concrete problem, risk, uncertainty, or decision this step is trying to resolve.\n"
-            "- Be specific: if this is an experiment, say which experiment; if this is a metric check, say which metric; if this is a file/report, say which file/report.\n"
-            "- If you use a technical term or a new abbreviation, explain it in ordinary words immediately.\n"
-            "- Keep `expected_output` and `why` to one or two short sentences each, but make them concrete and readable.\n"
-        )
-    authority_block = (
-        "\nAuthority ordering:\n"
-        "1. Current authoritative handoff artifact\n"
-        "2. Current authoritative artifacts named by that handoff\n"
-        "3. Current run state plus shared control programs\n"
-        "4. Older reports/archive are fallback-only when the higher-priority sources are insufficient\n"
-    )
-    handoff_block = ""
-    if authoritative_handoff and authoritative_handoff.get("payload"):
-        handoff_block = (
-            "\nCurrent authoritative handoff artifact:\n"
-            f"- Path: {authoritative_handoff.get('path')}\n"
-            f"- Payload: {json.dumps(authoritative_handoff.get('payload'), ensure_ascii=False, indent=2)}\n"
         )
     runner_execution_requirement = (
         "- Runner may implement or modify local code, but experiment launch/watch must follow the configured execution backend."
@@ -387,8 +342,8 @@ PERSON PROGRAM (human-owned):
 AGENT PROGRAM (reader-writable):
 {agent_program_full}
 
-CURRENT RUN STATE:
-{json.dumps(run_state, ensure_ascii=False, indent=2)}
+CURRENT TASK STATE:
+{json.dumps(task_state, ensure_ascii=False, indent=2)}
 {legacy_block}
 Execution requirements:
 - Use the role contract above; do not violate artifact ownership.
@@ -399,11 +354,8 @@ Execution requirements:
 - Use the backend-appropriate supervisor watch command for long-running monitoring rather than rediscovering active runs repeatedly.
 - Poll cadence reference: every {poll_seconds} seconds.
 - Write final role summary to: `{report_path}`.
-{authority_block}
 {extra_role_rules}
 {prompt_block}
-{observability_block}
-{handoff_block}
 
 Project-local role surface:
 {role_surface_block or '(No additional role surface files found)'}
@@ -503,11 +455,6 @@ def write_launch_metadata(
     prompt_file: Path,
     command_file: Path,
     report_file: Path,
-    canonical_state_hash: str | None = None,
-    applied_prompt_hash: str | None = None,
-    prompt_applied: bool = False,
-    observability_sidecar: Path | None = None,
-    segment_id: str | None = None,
     execution_backend: str = "ssh",
 ) -> Path:
     from scripts.research_loop_contract import atomic_write_json
@@ -522,17 +469,11 @@ def write_launch_metadata(
     payload = {
         "role": role,
         "execution_backend": execution_backend,
-        "prompt_contract_hash": rendered_prompt_hash,
         "rendered_prompt_hash": rendered_prompt_hash,
-        "canonical_state_hash": canonical_state_hash,
-        "applied_prompt_hash": applied_prompt_hash,
-        "prompt_applied": prompt_applied,
         "role_surface_root": str(role_surface_root) if role_surface_root else None,
         "prompt_file": str(prompt_file),
         "command_file": str(command_file),
         "report_file": str(report_file),
-        "observability_sidecar": str(observability_sidecar) if observability_sidecar else None,
-        "segment_id": segment_id,
         "canonical_transport_marker": canonical_transport_marker,
         "canonical_watch_marker": canonical_watch_marker,
         "updated_at": now_utc_iso(),
@@ -541,35 +482,43 @@ def write_launch_metadata(
     return metadata_path
 
 
-def normalize_post_role_run_state(role: str, run_state: dict[str, Any]) -> dict[str, Any]:
-    normalized = dict(run_state)
+def normalize_post_role_run_state(role: str, task_state: dict[str, Any]) -> dict[str, Any]:
+    """Normalize state after a role run completes.
+
+    Reader always transitions to runner.
+    Runner: respect runner's own phase/next_action choice for watch, terminal,
+    or continuation within cap. Only force to reader when cap is exhausted or
+    runner didn't make a choice.
+    """
+    normalized = dict(task_state)
     if role == "reader":
         normalized["phase"] = "runner"
         normalized["next_action"] = "runner"
         return normalized
 
-    success_statuses = {"success", "complete", "smoke_complete"}
-    if (
-        normalized.get("phase") == "reader"
-        or normalized.get("next_action") == "reader"
-        or normalized.get("remote_status") in success_statuses
-        or int(normalized.get("runner_iteration", 0)) >= int(normalized.get("runner_iteration_cap", 0))
-    ):
-        normalized["phase"] = "reader"
-        normalized["next_action"] = "reader"
+    # Runner post-processing: respect runner's own choice
+    runner_phase = normalized.get("phase")
+    runner_next = normalized.get("next_action")
+
+    # Terminal phases: always respect
+    if runner_phase in {"done", "abandoned", "needs_human"}:
+        return normalized
+
+    # Runner explicitly wants watch — respect it
+    if runner_phase == "watch" or runner_next == "watch":
+        return normalized
+
+    # Runner wants to stay runner and cap not exhausted — respect it
+    if runner_phase == "runner" or runner_next == "runner":
+        if int(normalized.get("runner_iteration", 0)) < int(normalized.get("runner_iteration_cap", 1)):
+            return normalized
+
+    # Default: transition to reader (cap exhausted or no explicit choice)
+    normalized["phase"] = "reader"
+    normalized["next_action"] = "reader"
     return normalized
 
 
-def prepare_prompt_contract(*, role: str, person_program_text: str, agent_program_text: str, run_state: dict[str, Any], authoritative_handoff: dict[str, Any] | None = None) -> dict[str, Any]:
-    render_state = sanitize_run_state_for_role(run_state, role)
-    applied_prompt = render_state.get("applied_human_prompt")
-    return {
-        "canonical_state_hash": compute_prompt_contract_hash(person_program_text, agent_program_text, role, run_state, authoritative_handoff=authoritative_handoff),
-        "rendered_prompt_hash": compute_rendered_prompt_contract_hash(person_program_text, agent_program_text, role, run_state, authoritative_handoff=authoritative_handoff),
-        "render_state": render_state,
-        "applied_prompt": applied_prompt,
-        "applied_prompt_hash": (applied_prompt or {}).get("prompt_sha256"),
-    }
 
 
 def consume_pending_human_prompt_if_matched(run_state: dict[str, Any], *, matched_prompt: dict[str, Any] | None) -> dict[str, Any]:
@@ -606,52 +555,21 @@ def main() -> int:
     root = Path(args.workdir).resolve()
     config = load_project_config(root)
     paths = require_runtime_artifacts(root, config)
-    loop_state = load_loop_state(paths.loop_state)
-    run_state = load_run_state(paths.run_state)
-    role = args.role or run_state["phase"]
+    task_state = load_task_state(paths.task_state)
+    role = args.role or task_state["phase"]
     role_surface_root = paths.reader_role_root if role == "reader" else paths.runner_role_root
     poll_seconds = int(args.poll_seconds) if args.poll_seconds is not None else int(config.get("default_poll_seconds", 300))
     model = args.model or config.get("default_model", "gpt-5.4")
     person_program_text = read_validated_text(paths.person_program, "person_program")
     agent_program_text = read_validated_text(paths.agent_program, "agent_program")
     execution_backend = resolve_execution_backend(config)
-    authoritative_handoff = None
-    handoff_path_raw = loop_state.get("last_authoritative_handoff_path")
-    if isinstance(handoff_path_raw, str) and handoff_path_raw:
-        try:
-            handoff_payload = load_authoritative_handoff_payload(
-                Path(handoff_path_raw),
-                expected_big_round_id=loop_state.get("big_round_id"),
-            )
-            if handoff_payload:
-                authoritative_handoff = {
-                    "path": handoff_path_raw,
-                    "payload": handoff_payload,
-                }
-        except Exception:
-            authoritative_handoff = None
     if role == "runner":
         ensure_runner_backend_requirements(config)
         if args.task:
             raise ValueError("runner mode rejects ad-hoc local task injection; use reader-produced artifacts only")
-    prompt_contract = prepare_prompt_contract(
-        role=role,
-        person_program_text=person_program_text,
-        agent_program_text=agent_program_text,
-        run_state=run_state,
-        authoritative_handoff=(authoritative_handoff or {}).get("payload"),
-    )
-    canonical_prompt_hash = prompt_contract["canonical_state_hash"]
-    rendered_run_state = prompt_contract["render_state"]
-    prompt_hash = prompt_contract["rendered_prompt_hash"]
-    expected_hash = args.expected_prompt_contract_hash or prompt_hash
-    if expected_hash != prompt_hash:
-        raise ValueError("expected prompt contract hash mismatch")
-    validate_resume_request(
-        loop_state=loop_state,
-        role=role,
-        resume_mode=args.resume_mode,
-        prompt_contract_hash=prompt_hash,
+
+    prompt_hash = compute_prompt_contract_hash(
+        person_program_text, agent_program_text, role, task_state
     )
 
     report_dir = paths.reports_root
@@ -665,10 +583,6 @@ def main() -> int:
     agent_program_summary = render_compact_summary(
         compact_text_summary("agent_program", paths.agent_program, agent_program_text)
     )
-    segment_id = f"{role}-{time.strftime('%Y%m%dT%H%M%S')}"
-    sidecar_path = paths.reports_root / f"agent-observability-{segment_id}.json"
-    rendered_run_state["observability_segment_id"] = segment_id
-    rendered_run_state["observability_sidecar_path"] = str(sidecar_path)
 
     prompt_text = build_role_prompt(
         role=role,
@@ -677,41 +591,22 @@ def main() -> int:
         agent_program=agent_program_summary,
         person_program_full=person_program_text,
         agent_program_full=agent_program_text,
-        run_state=rendered_run_state,
+        task_state=task_state,
         poll_seconds=poll_seconds,
         report_path=str(report_file),
         supervisor_template=supervisor_template,
         execution_backend=execution_backend,
         legacy_task=args.task,
-        authoritative_handoff=authoritative_handoff,
     )
     prompt_file = write_prompt_file(paths.prompts_root, prompt_text)
     output_file = paths.last_agent_message
     output_file.parent.mkdir(parents=True, exist_ok=True)
 
-    loop_state["last_prompt_role"] = role
-    loop_state["last_prompt_path"] = str(prompt_file)
-    loop_state["prompt_contract_hash"] = prompt_hash
-    loop_state["updated_at"] = now_utc_iso()
-    run_state["agent_program_ref"] = text_sha256(agent_program_text)
-    run_state["updated_at"] = now_utc_iso()
+    task_state["prompt_contract_hash"] = prompt_hash
+    task_state["agent_program_ref"] = text_sha256(agent_program_text)
+    task_state["updated_at"] = now_utc_iso()
     from scripts.research_loop_contract import atomic_write_json
-    atomic_write_json(paths.loop_state, loop_state)
-    atomic_write_json(paths.run_state, run_state)
-    export_omx_compat_artifacts(paths, config)
-
-    upsert_observability_segment(
-        paths.agent_observability,
-        {
-            "segment_id": segment_id,
-            "run_id": run_state.get("run_id"),
-            "role": role,
-            "status": "running",
-            "started_at": now_utc_iso(),
-            "sidecar_path": str(sidecar_path),
-            "merge_status": "not_found",
-        },
-    )
+    atomic_write_json(paths.task_state, task_state)
 
     cmd = build_codex_command(
         workspace_root=str(root),
@@ -732,23 +627,18 @@ def main() -> int:
         prompt_file=prompt_file,
         command_file=command_file,
         report_file=report_file,
-        canonical_state_hash=canonical_prompt_hash,
-        applied_prompt_hash=prompt_contract["applied_prompt_hash"],
-        prompt_applied=bool(prompt_contract["applied_prompt"]),
-        observability_sidecar=sidecar_path,
-        segment_id=segment_id,
         execution_backend=execution_backend,
     )
 
-    if rendered_run_state.get("applied_human_prompt") and not args.dry_run:
-        run_state = consume_pending_human_prompt_if_matched(
-            run_state,
-            matched_prompt=rendered_run_state.get("applied_human_prompt"),
+    pending = task_state.get("pending_human_prompt")
+    if isinstance(pending, dict) and pending.get("text") and not args.dry_run:
+        task_state = consume_pending_human_prompt_if_matched(
+            task_state,
+            matched_prompt=pending,
         )
-        run_state["last_applied_human_prompt"]["applied_role"] = role
-        run_state["updated_at"] = now_utc_iso()
-        atomic_write_json(paths.run_state, run_state)
-        export_omx_compat_artifacts(paths, config)
+        task_state["last_applied_human_prompt"]["applied_role"] = role
+        task_state["updated_at"] = now_utc_iso()
+        atomic_write_json(paths.task_state, task_state)
 
     print("Launching research agent:")
     print(f"Role: {role}")
@@ -764,42 +654,28 @@ def main() -> int:
         return 0
     start_time = now_utc_iso()
     completed = run_codex_command(cmd, cwd=role_surface_root, prompt_text=prompt_text)
-    merge_observability_sidecar(
-        paths.agent_observability,
-        {
-            "segment_id": segment_id,
-            "run_id": run_state.get("run_id"),
-            "role": role,
-            "status": "completed" if int(completed.returncode) == 0 else "failed",
-            "started_at": start_time,
-            "ended_at": now_utc_iso(),
-        },
-        sidecar_path,
-    )
     try:
-        latest_run_state = load_run_state(paths.run_state)
+        latest_task_state = load_task_state(paths.task_state)
     except Exception:
-        latest_run_state = run_state
-    latest_run_state = normalize_post_role_run_state(role, latest_run_state)
-    atomic_write_json(paths.run_state, latest_run_state)
-    export_omx_compat_artifacts(paths, config)
+        latest_task_state = task_state
+    latest_task_state = normalize_post_role_run_state(role, latest_task_state)
+    atomic_write_json(paths.task_state, latest_task_state)
     append_ai_worklog_entry(
         paths.ai_worklog,
         {
             "role": role,
             "start_time": start_time,
-            "current_objective": latest_run_state.get("current_objective", ""),
-            "runner_iteration": latest_run_state.get("runner_iteration", 0),
-            "runner_iteration_cap": latest_run_state.get("runner_iteration_cap", 0),
-            "reader_iteration": latest_run_state.get("reader_iteration", 0),
-            "reader_iteration_cap": latest_run_state.get("reader_iteration_cap", 0),
-            "success_condition": latest_run_state.get("success_condition", ""),
-            "remote_status": latest_run_state.get("remote_status", ""),
-            "latest_result_summary": latest_run_state.get("last_result_summary", ""),
-            "next_action": latest_run_state.get("next_action", ""),
+            "current_objective": latest_task_state.get("current_objective", ""),
+            "runner_iteration": latest_task_state.get("runner_iteration", 0),
+            "runner_iteration_cap": latest_task_state.get("runner_iteration_cap", 0),
+            "reader_iteration": latest_task_state.get("reader_iteration", 0),
+            "reader_iteration_cap": latest_task_state.get("reader_iteration_cap", 0),
+            "success_condition": latest_task_state.get("success_condition", ""),
+            "remote_status": latest_task_state.get("remote_status", ""),
+            "latest_result_summary": latest_task_state.get("last_result_summary", ""),
+            "next_action": latest_task_state.get("next_action", ""),
         },
     )
-    export_omx_compat_artifacts(paths, config)
     return int(completed.returncode)
 
 

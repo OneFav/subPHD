@@ -13,14 +13,11 @@ if str(ROOT_DIR) not in sys.path:
 
 from scripts.research_agent_cli import load_project_config
 from scripts.research_loop_contract import (
-    DEFAULT_AGENT_PROGRAM,
     atomic_write_json,
     atomic_write_text,
-    default_agent_observability,
-    default_loop_state,
-    default_run_state,
+    default_task_state,
     default_watch_snapshot,
-    ensure_role_surfaces,
+    now_utc_iso,
     resolve_artifact_paths,
 )
 
@@ -37,7 +34,6 @@ SCRIPT_FILES = [
 ROOT_FILES_TO_COPY = [
     "start.bat",
     "resume.bat",
-    "index.md",
 ]
 
 
@@ -205,7 +201,7 @@ watch_snapshot = "{normalize_artifact('watch_snapshot', '.subphd/state/research_
 watch_events = "{normalize_artifact('watch_events', '.subphd/state/research_watch_events.jsonl')}"
 run_state = "{normalize_artifact('run_state', '.subphd/state/run-state.json')}"
 ai_worklog = "{normalize_artifact('ai_worklog', '.subphd/logs/ai-worklog.md')}"
-agent_observability = "{normalize_artifact('agent_observability', '.subphd/state/agent-observability.json')}"
+
 
 [runtime]
 root = "{runtime.get('root', '.subphd') if str(runtime.get('root', '.subphd')) != '.omx' else '.subphd'}"
@@ -227,9 +223,6 @@ def render_migration_readme() -> str:
 This template is a reusable starter pack for the local sub-PHD runtime.
 
 ## What is already initialized
-- `index.md` is available as the agent-facing initialization surface
-- `skills/subphd-run-disclosure/` is available for understanding current project work
-- `skills/subphd-program-refinement/` is available for improving `person_program.md`
 - `person_program.md` is a valid starter template
 - `agent_program.md` is initialized
 - `.subphd/state/*.json` starts from a fresh `reader` state
@@ -239,13 +232,11 @@ This template is a reusable starter pack for the local sub-PHD runtime.
   - no separate workspace directory is required; agents work directly in the repo tree
 
 ## What you usually need to change in a new project
-1. Let the agent read `index.md`, deploy the two shipped sub-PHD skills, and perform initialization
-2. Use `subphd-program-refinement` when you want Codex to improve or rewrite `person_program.md`
-3. Use `subphd-run-disclosure` when you want Codex to explain the current run window and project progress
-4. If the new project uses a different remote checkout path, update:
+1. Edit `person_program.md`
+2. If the new project uses a different remote checkout path, update:
    - `remote_code_dir`
    - `remote_result_dir`
-5. If needed, adjust project-specific files under `research/`
+3. If needed, adjust project-specific files under `research/`
 
 ## Fresh start commands
 ```bash
@@ -256,62 +247,40 @@ python scripts/research_dashboard.py --workdir .
 ## Notes
 - `--ignore-state` resets the loop to a fresh task start (`reader`) and clears the dashboard timeline.
 - `agent_program.md` can remain auto-managed; the human only needs to maintain `person_program.md` to get started.
-- `subphd-run-disclosure` is the preferred skill for understanding what the project is currently doing.
-- `subphd-program-refinement` is the preferred skill for revising `person_program.md`.
-- Optional external carrier-agent skills may also be present under `skills/subphd-inspect/`,
-  `skills/subphd-control/`, and `skills/subphd-watch/`. They are examples for
-  Hermes/OpenClaw-style assistants that manage multiple sub-PHD projects from outside
-  the runtime; they are not part of the mandatory two-skill setup flow and do not mean
-  this starter implements a scheduler or registry API.
 - Continuity uses role-local windows with a short resume budget rather than unbounded same-chat history.
 - The authoritative handoff under the reports root should be treated as the first continuity source before generic recent reports.
 """
 
 
 def render_pack_readme() -> str:
-    return """# sub-PHD
+    return """# sub-PHD Migration Starter
 
-> An AI grad student for your PhD: you assign research, it does the work.
-
-## Best install method
-Give Codex this exact instruction:
-
-```text
-Read https://github.com/OneFav/subPHD/blob/main/index.md and install the project locally.
-```
-
-That `index.md` file is the agent-facing setup contract. It tells Codex to deploy the shipped skills, initialize the starter, and validate the local runtime.
+This package contains the minimal reusable sub-PHD runtime framework for moving into a new project.
 
 ## Included
-- `index.md`
-- `skills/subphd-run-disclosure/`
-- `skills/subphd-program-refinement/`
 - `person_program.md`
 - `agent_program.md`
-- `research_agent.toml`
-- `start.bat`
-- `resume.bat`
-- `.subphd/`
-- `roles/`
+- `research_agent.toml` (SSH/remote connection preserved)
+- `start.bat` (fresh start)
+- `resume.bat` (resume current state)
+- `.subphd/` fresh runtime state
+- `roles/reader/`
+- `roles/runner/`
 - `scripts/`
 - lightweight `research/` placeholders for log files referenced by config
 
-## Recommended usage
-- Use `subphd-run-disclosure` to understand what the current run window is doing and how complete it is versus `person_program.md`.
-- Use `subphd-program-refinement` when you want Codex to improve or rewrite `person_program.md`.
-- Optional external carrier-agent examples may also be present:
-  - `skills/subphd-inspect/`
-  - `skills/subphd-control/`
-  - `skills/subphd-watch/`
-  These are for outside assistants that manage multiple sub-PHD projects. They are not
-  part of the mandatory two-skill initialization flow and they do not add a runtime
-  scheduler or registry API.
+## Not included
+- project-specific research code
+- old runtime state/history from the source project
+- old reports/prompts/commands/synced results
+- benchmark-specific artifacts
 
-## Quick start
+## Typical migration steps
 1. Copy or unzip this starter into the new repo.
-2. Let Codex read `index.md`, deploy the two shipped sub-PHD skills, and install the project locally.
-3. Edit `person_program.md`.
-4. Start with:
+2. Replace `person_program.md` with the new mission.
+3. Keep or update the remote SSH settings in `research_agent.toml`.
+4. Add new project-specific code under `research/` if needed.
+5. Start with:
    - `start.bat` for a new task
    - `resume.bat` to continue existing state
 
@@ -325,53 +294,41 @@ That `index.md` file is the agent-facing setup contract. It tells Codex to deplo
 
 
 def render_pack_readme_zh() -> str:
-    return """# sub-PHD
+    return """# sub-PHD 迁移启动包
 
-> ????? AI ????????????????????
+这个包是可迁移到新项目的最小 sub-PHD 运行时框架。
 
-## ????????????
-?????????? Codex?
-
-```text
-?? https://github.com/OneFav/subPHD/blob/main/index.md ????????
-```
-
-?? `index.md` ??? Codex ?????????????????????? skill???? starter?????????
-
-## ???
-- `index.md`
-- `skills/subphd-run-disclosure/`
-- `skills/subphd-program-refinement/`
+## 已包含
 - `person_program.md`
 - `agent_program.md`
-- `research_agent.toml`
-- `start.bat`
-- `resume.bat`
-- `.subphd/`
-- `roles/`
+- `research_agent.toml`（保留开发机 SSH / 远程连接参数）
+- `start.bat`（新任务启动）
+- `resume.bat`（续跑当前状态）
+- `.subphd/` 新初始化状态
+- `roles/reader/`
+- `roles/runner/`
 - `scripts/`
-- `research/` ??????????
+- `research/` 下极简占位日志文件
 
-## ????
-- ? `subphd-run-disclosure` ??????????? run ????????? `person_program.md` ?????
-- ? `subphd-program-refinement` ????? `person_program.md`?
-- Optional external carrier-agent examples may also be present: `skills/subphd-inspect/`,
-  `skills/subphd-control/`, and `skills/subphd-watch/`. They are for outside assistants
-  that manage multiple sub-PHD projects; they are not part of the mandatory two-skill
-  initialization flow and do not add a runtime scheduler or registry API.
+## 不包含
+- 当前项目的研究代码
+- 当前项目旧的运行状态和历史
+- 旧 reports / prompts / commands / synced results
+- benchmark 专属产物
 
-## ????
-1. ??? starter ????????????
-2. ? Codex ?? `index.md`??????? skill??????????
-3. ?? `person_program.md`?
-4. ? `start.bat` ? `resume.bat` ???
+## 迁移到新项目时通常怎么做
+1. 把这个启动包复制或解压到新项目里。
+2. 改写 `person_program.md`。
+3. 按需保留或修改 `research_agent.toml` 里的远程 SSH 参数。
+4. 如果需要，在 `research/` 下加入新项目自己的代码。
+5. 启动时：
+   - 新任务用 `start.bat`
+   - 续跑用 `resume.bat`
 
-## ??
-- `start.bat` ???? `.subphd/state/*`?
-- `resume.bat` ????? `.subphd/state/*`?
-- ?? canonical runtime ???? `.subphd/`?
-- continuity ? role-local window ???????????????
-- authoritative handoff ? generic recent reports ??????
+## 说明
+- `start.bat` 会先重置 `.subphd/state/*`。
+- `resume.bat` 会复用当前 `.subphd/state/*`。
+- 当前 canonical runtime 根目录是 `.subphd/`。
 """
 
 
@@ -396,14 +353,6 @@ def build_migration_pack(root: Path, output_dir: Path) -> tuple[Path, Path]:
         source = root / name
         if source.exists():
             shutil.copy2(source, pack_root / name)
-    skills_root = root / "skills"
-    if skills_root.exists():
-        shutil.copytree(skills_root, pack_root / "skills", dirs_exist_ok=True)
-    protocol_doc = root / "docs" / "subphd-agent-protocol.md"
-    if protocol_doc.exists():
-        docs_root = pack_root / "docs"
-        docs_root.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(protocol_doc, docs_root / "subphd-agent-protocol.md")
     if not (pack_root / "start.bat").exists():
         atomic_write_text(pack_root / "start.bat", render_start_bat())
     if not (pack_root / "resume.bat").exists():
@@ -411,9 +360,11 @@ def build_migration_pack(root: Path, output_dir: Path) -> tuple[Path, Path]:
 
     atomic_write_text(pack_root / "research_agent.toml", render_research_agent_toml(config))
     atomic_write_text(pack_root / "person_program.md", render_template_person_program())
-    atomic_write_text(pack_root / "agent_program.md", DEFAULT_AGENT_PROGRAM)
+    atomic_write_text(pack_root / "agent_program.md", "# agent_program.md\n\n## Current Strategy\n- Reader may edit this file directly.\n- Default posture: prioritize explicit, traceable, budget-aware research progress.\n\n## Revision Suggestions\n- None yet.\n")
     atomic_write_text(pack_root / "README.md", render_pack_readme())
     atomic_write_text(pack_root / "README.zh-CN.md", render_pack_readme_zh())
+    atomic_write_text(pack_root / "README-migrate.md", render_migration_readme())
+
     pack_config = load_project_config(pack_root)
     paths = resolve_artifact_paths(pack_root, pack_config)
 
@@ -430,12 +381,20 @@ def build_migration_pack(root: Path, output_dir: Path) -> tuple[Path, Path]:
         paths.roles_root,
     ]:
         directory.mkdir(parents=True, exist_ok=True)
-    ensure_role_surfaces(paths)
+    # Copy role surface files from source project if they exist
+    source_reader = paths.workspace_root / "roles" / "reader" / "AGENTS.md"
+    source_runner = paths.workspace_root / "roles" / "runner" / "AGENTS.md"
+    for role_name, role_root, source in [
+        ("reader", paths.reader_role_root, source_reader),
+        ("runner", paths.runner_role_root, source_runner),
+    ]:
+        role_root.mkdir(parents=True, exist_ok=True)
+        agent_path = role_root / "AGENTS.md"
+        if not agent_path.exists() and source.exists():
+            agent_path.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
 
-    atomic_write_json(paths.loop_state, default_loop_state(pack_config))
+    atomic_write_json(paths.task_state, default_task_state(pack_config))
     atomic_write_json(paths.watch_snapshot, default_watch_snapshot())
-    atomic_write_json(paths.run_state, default_run_state(pack_config))
-    atomic_write_json(paths.agent_observability, default_agent_observability())
     ensure_empty_file(paths.watch_events)
     ensure_empty_file(paths.ai_worklog)
 

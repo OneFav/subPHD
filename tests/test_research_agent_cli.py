@@ -13,18 +13,14 @@ from scripts.research_agent_cli import (
     consume_pending_human_prompt_if_matched,
     ensure_runner_backend_requirements,
     ensure_runner_remote_requirements,
-    prepare_prompt_contract,
     run_codex_command,
     write_launch_metadata,
 )
 from scripts.research_loop_contract import (
     compact_text_summary,
     compute_prompt_contract_hash,
-    compute_rendered_prompt_contract_hash,
     read_validated_text,
     render_compact_summary,
-    sanitize_run_state_for_role,
-    validate_resume_request,
 )
 
 
@@ -36,7 +32,7 @@ class ResearchAgentCliTests(unittest.TestCase):
             agent_program="agent_summary",
             person_program_full="# person",
             agent_program_full="# agent",
-            run_state={"phase": "reader", "current_objective": "objective-a", "runner_iteration": 0},
+            task_state={"phase": "reader", "current_objective": "objective-a", "runner_iteration": 0},
             poll_seconds=300,
             report_path="C:/repo/.subphd/reports/final.md",
             supervisor_template="python scripts/research_supervisor.py launch-bash --script-file x.sh",
@@ -52,7 +48,7 @@ class ResearchAgentCliTests(unittest.TestCase):
             agent_program="agent_summary",
             person_program_full="# person",
             agent_program_full="# agent",
-            run_state={"phase": "reader", "current_objective": "objective-a", "runner_iteration": 0},
+            task_state={"phase": "reader", "current_objective": "objective-a", "runner_iteration": 0},
             poll_seconds=300,
             report_path="C:/repo/.omx/reports/final.md",
             supervisor_template="python scripts/research_supervisor.py launch-bash --script-file x.sh",
@@ -65,62 +61,7 @@ class ResearchAgentCliTests(unittest.TestCase):
         self.assertIn("READER lane", prompt)
         self.assertIn("legacy", prompt)
         self.assertIn("final.md", prompt)
-        self.assertIn("CURRENT RUN STATE", prompt)
-
-    def test_build_role_prompt_includes_two_phase_observability_contract(self) -> None:
-        prompt = build_role_prompt(
-            role="runner",
-            person_program="person_summary",
-            agent_program="agent_summary",
-            person_program_full="# person",
-            agent_program_full="# agent",
-            run_state={
-                "phase": "runner",
-                "current_objective": "objective-a",
-                "runner_iteration": 1,
-                "observability_sidecar_path": "C:/repo/.omx/reports/agent-observability-runner-1.json",
-                "observability_segment_id": "runner-1",
-            },
-            poll_seconds=300,
-            report_path="C:/repo/.omx/reports/final.md",
-            supervisor_template="python scripts/research_supervisor.py launch-bash --script-file x.sh",
-            legacy_task=None,
-        )
-        self.assertIn("Write/update JSON twice", prompt)
-        self.assertIn("Write #1 immediately at start", prompt)
-        self.assertIn("Write #2 before exit", prompt)
-        self.assertIn("completion_summary", prompt)
-        self.assertIn("started_at", prompt)
-        self.assertIn("ended_at", prompt)
-        self.assertIn("status", prompt)
-        self.assertIn("Use plain language that a human can understand quickly", prompt)
-        self.assertIn("Do not write vague filler such as", prompt)
-        self.assertIn("name the concrete experiment, code change, check, artifact, file, or decision", prompt)
-        self.assertIn("name the concrete problem, risk, uncertainty, or decision", prompt)
-
-    def test_build_role_prompt_ranks_authoritative_handoff_before_generic_reports(self) -> None:
-        prompt = build_role_prompt(
-            role="reader",
-            person_program="person_summary",
-            agent_program="agent_summary",
-            person_program_full="# person",
-            agent_program_full="# agent",
-            run_state={"phase": "reader", "current_objective": "objective-a", "runner_iteration": 0},
-            poll_seconds=300,
-            report_path="C:/repo/.subphd/reports/final.md",
-            supervisor_template="python scripts/research_supervisor.py launch-bash --script-file x.sh",
-            legacy_task=None,
-            authoritative_handoff={
-                "path": "C:/repo/.subphd/reports/authoritative-handoffs/a.json",
-                "payload": {
-                    "handoff_summary_text": "Prioritize current-window evidence.",
-                    "authoritative_artifacts": ["C:/repo/.subphd/reports/authoritative-handoffs/a.json"],
-                },
-            },
-        )
-        self.assertIn("Authority ordering", prompt)
-        self.assertIn("Current authoritative handoff artifact", prompt)
-        self.assertIn("Older reports/archive are fallback-only", prompt)
+        self.assertIn("CURRENT TASK STATE", prompt)
 
     def test_build_role_prompt_instructs_runner_to_prune_remote_results_before_watch_sync(self) -> None:
         prompt = build_role_prompt(
@@ -129,7 +70,7 @@ class ResearchAgentCliTests(unittest.TestCase):
             agent_program="agent_summary",
             person_program_full="# person",
             agent_program_full="# agent",
-            run_state={
+            task_state={
                 "phase": "runner",
                 "current_objective": "objective-a",
                 "runner_iteration": 1,
@@ -150,7 +91,7 @@ class ResearchAgentCliTests(unittest.TestCase):
             agent_program="agent_summary",
             person_program_full="# person",
             agent_program_full="# agent",
-            run_state={
+            task_state={
                 "phase": "reader",
                 "current_objective": "Write the next bounded runner assignment.",
                 "reader_iteration": 1,
@@ -174,7 +115,7 @@ class ResearchAgentCliTests(unittest.TestCase):
             agent_program="agent_summary",
             person_program_full="# person",
             agent_program_full="# agent",
-            run_state={
+            task_state={
                 "phase": "reader",
                 "current_objective": "Analyze the latest results and decide what claim is supported.",
                 "reader_iteration": 1,
@@ -195,7 +136,7 @@ class ResearchAgentCliTests(unittest.TestCase):
             agent_program="agent_summary",
             person_program_full="# person",
             agent_program_full="# agent\n\nRunner skills: training-check",
-            run_state={
+            task_state={
                 "phase": "runner",
                 "current_objective": "Patch the launch script.",
                 "runner_iteration": 1,
@@ -233,7 +174,7 @@ class ResearchAgentCliTests(unittest.TestCase):
             agent_program="agent_summary",
             person_program_full="# person",
             agent_program_full="# agent",
-            run_state={
+            task_state={
                 "phase": "runner",
                 "current_objective": "Run local smoke experiment.",
                 "runner_iteration": 1,
@@ -288,32 +229,6 @@ class ResearchAgentCliTests(unittest.TestCase):
             self.assertIn("--backend local", payload["canonical_transport_marker"])
             self.assertIn("watch-backend --backend local", payload["canonical_watch_marker"])
 
-    def test_cross_role_resume_is_rejected(self) -> None:
-        loop_state = {
-            "last_prompt_role": "reader",
-            "prompt_contract_hash": "abc",
-        }
-        with self.assertRaises(ValueError):
-            validate_resume_request(
-                loop_state=loop_state,
-                role="runner",
-                resume_mode="resume_same_role",
-                prompt_contract_hash="abc",
-            )
-
-    def test_same_role_resume_hash_mismatch_is_rejected(self) -> None:
-        loop_state = {
-            "last_prompt_role": "runner",
-            "prompt_contract_hash": "abc",
-        }
-        with self.assertRaises(ValueError):
-            validate_resume_request(
-                loop_state=loop_state,
-                role="runner",
-                resume_mode="resume_same_role",
-                prompt_contract_hash="xyz",
-            )
-
     def test_build_codex_command_uses_resume_only_for_same_role_mode(self) -> None:
         fresh = build_codex_command(
             workdir="C:/repo",
@@ -360,64 +275,6 @@ class ResearchAgentCliTests(unittest.TestCase):
         hash_from_autoloop_basis = compute_prompt_contract_hash("person-a", "agent-a", "runner", run_state)
         hash_from_agent_cli_basis = compute_prompt_contract_hash("person-a", "agent-a", "runner", run_state)
         self.assertEqual(hash_from_autoloop_basis, hash_from_agent_cli_basis)
-
-    def test_non_target_role_sanitization_hides_pending_human_prompt(self) -> None:
-        run_state = {
-            "phase": "reader",
-            "current_objective": "obj",
-            "pending_human_prompt": {
-                "target": "runner",
-                "text": "focus on ablation table",
-                "created_at": "2026-04-14T00:00:00Z",
-            },
-        }
-        sanitized = sanitize_run_state_for_role(run_state, "reader")
-        prompt = build_role_prompt(
-            role="reader",
-            person_program="person_summary",
-            agent_program="agent_summary",
-            person_program_full="# person",
-            agent_program_full="# agent",
-            run_state=sanitized,
-            poll_seconds=300,
-            report_path="C:/repo/.omx/reports/final.md",
-            supervisor_template="python scripts/research_supervisor.py watch",
-            legacy_task=None,
-        )
-        self.assertNotIn("pending_human_prompt", prompt)
-        self.assertNotIn("focus on ablation table", prompt)
-
-    def test_matching_role_rendered_prompt_hash_differs_when_prompt_applies(self) -> None:
-        run_state = {
-            "phase": "runner",
-            "current_objective": "obj",
-            "pending_human_prompt": {
-                "target": "runner",
-                "text": "focus on ablation table",
-                "created_at": "2026-04-14T00:00:00Z",
-            },
-        }
-        baseline_hash = compute_prompt_contract_hash("person-a", "agent-a", "runner", run_state)
-        rendered_hash = compute_rendered_prompt_contract_hash("person-a", "agent-a", "runner", run_state)
-        self.assertNotEqual(baseline_hash, rendered_hash)
-
-    def test_prepare_prompt_contract_returns_applied_prompt_for_matching_role(self) -> None:
-        contract = prepare_prompt_contract(
-            role="runner",
-            person_program_text="person",
-            agent_program_text="agent",
-            run_state={
-                "phase": "runner",
-                "current_objective": "obj",
-                "pending_human_prompt": {
-                    "target": "runner",
-                    "text": "runner only",
-                    "created_at": "2026-04-14T00:00:00Z",
-                },
-            },
-        )
-        self.assertEqual(contract["applied_prompt"]["text"], "runner only")
-        self.assertIn("applied_human_prompt", contract["render_state"])
 
     def test_consume_pending_human_prompt_if_matched_only_clears_matching_prompt(self) -> None:
         run_state = {
@@ -492,21 +349,12 @@ class ResearchAgentCliTests(unittest.TestCase):
                 root,
                 role="runner",
                 rendered_prompt_hash="rendered-hash",
-                canonical_state_hash="canonical-hash",
-                applied_prompt_hash="applied-hash",
-                prompt_applied=True,
                 prompt_file=root / "prompt.md",
                 command_file=root / "command.txt",
                 report_file=root / "report.md",
-                observability_sidecar=root / "sidecar.json",
-                segment_id="seg-1",
             )
             payload = json.loads(metadata_path.read_text(encoding="utf-8"))
-            self.assertEqual(payload["prompt_contract_hash"], "rendered-hash")
-            self.assertEqual(payload["canonical_state_hash"], "canonical-hash")
-            self.assertEqual(payload["applied_prompt_hash"], "applied-hash")
-            self.assertTrue(payload["prompt_applied"])
-            self.assertEqual(payload["segment_id"], "seg-1")
+            self.assertEqual(payload["rendered_prompt_hash"], "rendered-hash")
 
     def test_repo_agent_program_has_no_legacy_omx_report_or_synced_result_refs(self) -> None:
         text = Path("agent_program.md").read_text(encoding="utf-8")

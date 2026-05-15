@@ -6,7 +6,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from scripts import research_agent_cli
-from scripts.research_loop_contract import bootstrap_state_artifacts, load_run_state, atomic_write_json
+from scripts.research_loop_contract import bootstrap_state_artifacts, load_task_state, atomic_write_json
 
 
 class SimplifiedAgentCliFlowTests(unittest.TestCase):
@@ -54,18 +54,18 @@ ai_worklog = ".omx/logs/ai-worklog.md"
             agent_program="agent_summary",
             person_program_full="# person",
             agent_program_full="# agent",
-            run_state={"phase": "reader", "current_objective": "obj", "runner_iteration": 0},
+            task_state={"phase": "reader", "current_objective": "obj", "runner_iteration": 0},
             poll_seconds=300,
             report_path="C:/repo/.omx/reports/final.md",
             supervisor_template="python scripts/research_supervisor.py watch",
             legacy_task=None,
         )
-        self.assertIn("CURRENT RUN STATE", prompt)
+        self.assertIn("CURRENT TASK STATE", prompt)
         self.assertIn("current_objective", prompt)
         self.assertNotIn("CURRENT ASSIGNMENT", prompt)
         self.assertIn("Reader read whitelist", prompt)
         self.assertIn("person_program.md", prompt)
-        self.assertIn("run-state.json", prompt)
+        self.assertIn("task-state.json", prompt)
 
     def test_runner_prompt_mentions_runner_owned_state_switch(self) -> None:
         prompt = research_agent_cli.build_role_prompt(
@@ -74,14 +74,14 @@ ai_worklog = ".omx/logs/ai-worklog.md"
             agent_program="agent_summary",
             person_program_full="# person",
             agent_program_full="# agent",
-            run_state={"phase": "runner", "current_objective": "obj", "runner_iteration": 1, "runner_iteration_cap": 1},
+            task_state={"phase": "runner", "current_objective": "obj", "runner_iteration": 1, "runner_iteration_cap": 1},
             poll_seconds=300,
             report_path="C:/repo/.omx/reports/final.md",
             supervisor_template="python scripts/research_supervisor.py watch",
             legacy_task=None,
         )
         self.assertIn("Runner-owned state transition", prompt)
-        self.assertIn("set `run-state.json` back to `reader`", prompt)
+        self.assertIn("set `task-state.json` back to `reader`", prompt)
         self.assertIn("may implement or modify local code", prompt)
         self.assertIn("Experiment launch and watch behavior must follow the configured execution backend", prompt)
 
@@ -92,7 +92,7 @@ ai_worklog = ".omx/logs/ai-worklog.md"
             self.seed_files(root)
             config = research_agent_cli.load_project_config(root)
             paths = bootstrap_state_artifacts(root, config)
-            run_state = load_run_state(paths.run_state)
+            run_state = load_task_state(paths.task_state)
             run_state.update({
                 "current_objective": "reader objective",
                 "reader_iteration": 1,
@@ -102,7 +102,7 @@ ai_worklog = ".omx/logs/ai-worklog.md"
                 "success_condition": "score > 0.8",
                 "next_action": "reader",
             })
-            atomic_write_json(paths.run_state, run_state)
+            atomic_write_json(paths.task_state, run_state)
 
             class Result:
                 returncode = 0
@@ -113,7 +113,7 @@ ai_worklog = ".omx/logs/ai-worklog.md"
                 rc = research_agent_cli.main()
 
             self.assertEqual(rc, 0)
-            final_state = load_run_state(paths.run_state)
+            final_state = load_task_state(paths.task_state)
             self.assertEqual(final_state["phase"], "runner")
             self.assertEqual(final_state["next_action"], "runner")
             text = paths.ai_worklog.read_text(encoding="utf-8")
@@ -128,7 +128,7 @@ ai_worklog = ".omx/logs/ai-worklog.md"
             self.seed_files(root)
             config = research_agent_cli.load_project_config(root)
             paths = bootstrap_state_artifacts(root, config)
-            run_state = load_run_state(paths.run_state)
+            run_state = load_task_state(paths.task_state)
             run_state.update({
                 "phase": "runner",
                 "current_objective": "runner objective",
@@ -139,7 +139,7 @@ ai_worklog = ".omx/logs/ai-worklog.md"
                 "success_condition": "score > 0.8",
                 "next_action": "watch",
             })
-            atomic_write_json(paths.run_state, run_state)
+            atomic_write_json(paths.task_state, run_state)
 
             class Result:
                 returncode = 0
@@ -150,9 +150,47 @@ ai_worklog = ".omx/logs/ai-worklog.md"
                 rc = research_agent_cli.main()
 
             self.assertEqual(rc, 0)
-            final_state = load_run_state(paths.run_state)
-            self.assertEqual(final_state["phase"], "reader")
-            self.assertEqual(final_state["next_action"], "reader")
+            final_state = load_task_state(paths.task_state)
+            # New behavior: watch is respected even when cap exhausted
+            self.assertEqual(final_state["phase"], "runner")
+            self.assertEqual(final_state["next_action"], "watch")
+
+    def test_normalize_runner_respects_watch_phase(self):
+        from scripts.research_agent_cli import normalize_post_role_run_state
+        state = {"phase": "watch", "next_action": "watch", "runner_iteration": 0, "runner_iteration_cap": 4}
+        result = normalize_post_role_run_state("runner", state)
+        self.assertEqual(result["phase"], "watch")
+
+    def test_normalize_runner_respects_runner_phase_when_cap_not_exhausted(self):
+        from scripts.research_agent_cli import normalize_post_role_run_state
+        state = {"phase": "runner", "next_action": "runner", "runner_iteration": 1, "runner_iteration_cap": 4}
+        result = normalize_post_role_run_state("runner", state)
+        self.assertEqual(result["phase"], "runner")
+
+    def test_normalize_runner_respects_terminal_phase(self):
+        from scripts.research_agent_cli import normalize_post_role_run_state
+        state = {"phase": "done", "next_action": "done", "runner_iteration": 3, "runner_iteration_cap": 4}
+        result = normalize_post_role_run_state("runner", state)
+        self.assertEqual(result["phase"], "done")
+
+    def test_normalize_runner_goes_reader_when_cap_exhausted(self):
+        from scripts.research_agent_cli import normalize_post_role_run_state
+        state = {"phase": "runner", "next_action": "runner", "runner_iteration": 4, "runner_iteration_cap": 4}
+        result = normalize_post_role_run_state("runner", state)
+        self.assertEqual(result["phase"], "reader")
+
+    def test_normalize_reader_always_transitions_to_runner(self):
+        from scripts.research_agent_cli import normalize_post_role_run_state
+        state = {"phase": "reader", "next_action": "reader"}
+        result = normalize_post_role_run_state("reader", state)
+        self.assertEqual(result["phase"], "runner")
+
+    def test_consume_pending_human_prompt_moves_to_applied(self):
+        from scripts.research_agent_cli import consume_pending_human_prompt_if_matched
+        state = {"pending_human_prompt": {"target": "runner", "text": "check OOM"}}
+        result = consume_pending_human_prompt_if_matched(state, matched_prompt=state["pending_human_prompt"])
+        self.assertNotIn("pending_human_prompt", result)
+        self.assertEqual(result["last_applied_human_prompt"]["text"], "check OOM")
 
 
 if __name__ == "__main__":

@@ -11,11 +11,10 @@ from scripts.research_agent_cli import load_project_config
 from scripts.research_loop_contract import (
     SCHEMA_VERSION,
     bootstrap_state_artifacts,
-    compute_rendered_prompt_contract_hash,
-    default_loop_state,
+    compute_prompt_contract_hash,
+    default_task_state,
     default_watch_snapshot,
-    load_loop_state,
-    load_run_state,
+    load_task_state,
     read_json,
 )
 
@@ -77,11 +76,11 @@ watch_events = ".omx/state/research_watch_events.jsonl"
                 encoding="utf-8",
             )
             paths = bootstrap_state_artifacts(root, {})
-            bad = default_loop_state({})
+            bad = default_task_state({})
             bad["schema_version"] = 999
-            paths.loop_state.write_text(json.dumps(bad), encoding="utf-8")
+            paths.task_state.write_text(json.dumps(bad), encoding="utf-8")
             with self.assertRaises(ValueError):
-                load_loop_state(paths.loop_state)
+                load_task_state(paths.task_state)
 
     def test_missing_required_loop_state_key_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -92,11 +91,11 @@ watch_events = ".omx/state/research_watch_events.jsonl"
                 encoding="utf-8",
             )
             paths = bootstrap_state_artifacts(root, {})
-            bad = default_loop_state({})
+            bad = default_task_state({})
             bad.pop("updated_at")
-            paths.loop_state.write_text(json.dumps(bad), encoding="utf-8")
+            paths.task_state.write_text(json.dumps(bad), encoding="utf-8")
             with self.assertRaises(ValueError):
-                load_loop_state(paths.loop_state)
+                load_task_state(paths.task_state)
 
     def test_advance_run_state_after_synced_hands_off_by_cap(self) -> None:
         run_state = {
@@ -151,8 +150,8 @@ watch_events = ".omx/state/research_watch_events.jsonl"
             "local_evidence_paths": {"summary.json": "results/summary.json"},
         })
         self.assertEqual(next_state["phase"], "reader")
-        self.assertEqual(next_state["execution_status"], "synced")
         self.assertEqual(next_state["remote_status"], "synced")
+        self.assertEqual(next_state["runner_done_reason"], "cap_exhausted")
 
     def test_rendered_prompt_hash_uses_same_basis_as_launcher(self) -> None:
         run_state = {
@@ -164,96 +163,9 @@ watch_events = ".omx/state/research_watch_events.jsonl"
                 "created_at": "2026-04-14T00:00:00Z",
             },
         }
-        hash_from_autoloop_basis = compute_rendered_prompt_contract_hash("person-a", "agent-a", "runner", run_state)
-        hash_from_launcher_basis = compute_rendered_prompt_contract_hash("person-a", "agent-a", "runner", run_state)
+        hash_from_autoloop_basis = compute_prompt_contract_hash("person-a", "agent-a", "runner", run_state)
+        hash_from_launcher_basis = compute_prompt_contract_hash("person-a", "agent-a", "runner", run_state)
         self.assertEqual(hash_from_autoloop_basis, hash_from_launcher_basis)
-
-    def test_role_local_window_policy_uses_resume_same_role_below_budget(self) -> None:
-        from scripts import research_autoloop
-
-        loop_state = default_loop_state({})
-        loop_state.update({
-            "window_role": "runner",
-            "role_window_id": "runner-window-1",
-            "resume_budget": 3,
-            "resume_count": 2,
-            "last_prompt_role": "runner",
-            "prompt_contract_hash": "abc",
-            "big_round_id": "big-round-1",
-        })
-        policy = research_autoloop.choose_continuation_policy(
-            loop_state=loop_state,
-            role="runner",
-            prompt_contract_hash="abc",
-            handoff_status="valid",
-        )
-        self.assertEqual(policy["resume_mode"], "resume_same_role")
-        self.assertEqual(policy["next_resume_count"], 3)
-
-    def test_role_local_window_policy_rolls_over_after_budget_exhaustion(self) -> None:
-        from scripts import research_autoloop
-
-        loop_state = default_loop_state({})
-        loop_state.update({
-            "window_role": "runner",
-            "role_window_id": "runner-window-1",
-            "resume_budget": 3,
-            "resume_count": 3,
-            "last_prompt_role": "runner",
-            "prompt_contract_hash": "abc",
-            "big_round_id": "big-round-1",
-        })
-        policy = research_autoloop.choose_continuation_policy(
-            loop_state=loop_state,
-            role="runner",
-            prompt_contract_hash="abc",
-            handoff_status="valid",
-        )
-        self.assertEqual(policy["resume_mode"], "fresh")
-        self.assertTrue(policy["start_new_window"])
-
-    def test_role_change_starts_fresh_role_local_window(self) -> None:
-        from scripts import research_autoloop
-
-        loop_state = default_loop_state({})
-        loop_state.update({
-            "window_role": "reader",
-            "role_window_id": "reader-window-1",
-            "resume_budget": 3,
-            "resume_count": 1,
-            "last_prompt_role": "reader",
-            "prompt_contract_hash": "abc",
-            "big_round_id": "big-round-1",
-        })
-        policy = research_autoloop.choose_continuation_policy(
-            loop_state=loop_state,
-            role="runner",
-            prompt_contract_hash="abc",
-            handoff_status="valid",
-        )
-        self.assertEqual(policy["resume_mode"], "fresh")
-        self.assertTrue(policy["start_new_window"])
-        self.assertEqual(policy["next_window_role"], "runner")
-
-    def test_resolve_authoritative_handoff_marks_invalid_payload(self) -> None:
-        from scripts import research_autoloop
-
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            self.write_config(root)
-            (root / "person_program.md").write_text(
-                "# person_program.md\n\n## 1. Core Objective for This Cycle\nBuild the strongest paper evidence package.\n\n## 2. Default Priority Order\nFirst mainline evidence.\n\n## 3. Reader Responsibilities\nThe reader defines the next step.\n\nThis paper direction needs the best evidence package.\n",
-                encoding="utf-8",
-            )
-            paths = bootstrap_state_artifacts(root, {})
-            broken_handoff = paths.reports_root / "authoritative-handoffs" / "broken.json"
-            broken_handoff.parent.mkdir(parents=True, exist_ok=True)
-            broken_handoff.write_text(json.dumps({"schema_version": 1, "window_role": "runner"}), encoding="utf-8")
-            loop_state = load_loop_state(paths.loop_state)
-            loop_state["last_authoritative_handoff_path"] = str(broken_handoff)
-            payload, status = research_autoloop.resolve_authoritative_handoff(paths, loop_state)
-            self.assertIsNone(payload)
-            self.assertEqual(status, "invalid")
 
     def test_research_loop_contract_stays_pure(self) -> None:
         contract_text = Path("scripts/research_loop_contract.py").read_text(encoding="utf-8")
@@ -271,7 +183,7 @@ watch_events = ".omx/state/research_watch_events.jsonl"
                 encoding="utf-8",
             )
             paths = bootstrap_state_artifacts(root, {})
-            (paths.run_state).write_text(json.dumps({
+            (paths.task_state).write_text(json.dumps({
                 "schema_version": SCHEMA_VERSION,
                 "phase": "reader",
                 "role_context_mode": "isolated",
@@ -333,7 +245,7 @@ watch_events = ".omx/state/research_watch_events.jsonl"
             )
             config = load_project_config(root)
             paths = bootstrap_state_artifacts(root, config)
-            stale_run_state = load_run_state(paths.run_state)
+            stale_run_state = load_task_state(paths.task_state)
             stale_run_state.update({
                 "phase": "watch",
                 "next_action": "watch",
@@ -342,17 +254,7 @@ watch_events = ".omx/state/research_watch_events.jsonl"
                 "pending_human_prompt": {"target": "runner", "text": "old prompt", "created_at": "2026-04-14T00:00:00Z"},
                 "last_error": "stale error",
             })
-            paths.run_state.write_text(json.dumps(stale_run_state, ensure_ascii=False, indent=2), encoding="utf-8")
-            paths.agent_observability.write_text(json.dumps({
-                "schema_version": SCHEMA_VERSION,
-                "segments": [{
-                    "segment_id": "old-seg",
-                    "role": "runner",
-                    "status": "completed",
-                    "task": "Old task",
-                }],
-                "updated_at": "2026-04-14T00:00:00Z",
-            }, ensure_ascii=False, indent=2), encoding="utf-8")
+            paths.task_state.write_text(json.dumps(stale_run_state, ensure_ascii=False, indent=2), encoding="utf-8")
             paths.watch_snapshot.write_text(json.dumps({
                 **default_watch_snapshot(),
                 "watch_status": "synced",
@@ -364,18 +266,16 @@ watch_events = ".omx/state/research_watch_events.jsonl"
                 rc = research_autoloop.main()
 
             self.assertEqual(rc, 0)
-            final_run_state = load_run_state(paths.run_state)
+            final_run_state = load_task_state(paths.task_state)
             self.assertEqual(final_run_state["phase"], "reader")
             self.assertEqual(final_run_state["next_action"], "reader")
             self.assertEqual(final_run_state["runner_iteration"], 0)
             self.assertEqual(final_run_state["current_objective"], "")
             self.assertIsNone(final_run_state["pending_human_prompt"])
             self.assertIsNone(final_run_state["last_error"])
-            final_observability = read_json(paths.agent_observability)
-            self.assertEqual(final_observability["segments"], [])
-            final_loop_state = load_loop_state(paths.loop_state)
-            self.assertEqual(final_loop_state["next_agent"], "reader")
-            self.assertEqual(final_loop_state["last_transition_reason"], "ignore_state_fresh_start")
+            final_task_state_check = load_task_state(paths.task_state)
+            self.assertEqual(final_task_state_check["window_role"], "reader")
+            self.assertEqual(final_task_state_check["next_action"], "reader")
             final_snapshot = read_json(paths.watch_snapshot)
             self.assertEqual(final_snapshot["watch_status"], "idle")
             self.assertFalse(final_snapshot["runner_active"])
@@ -413,7 +313,7 @@ ai_worklog = ".omx/logs/ai-worklog.md"
             )
             config = load_project_config(root)
             paths = bootstrap_state_artifacts(root, config)
-            run_state = load_run_state(paths.run_state)
+            run_state = load_task_state(paths.task_state)
             run_state.update({
                 "phase": "watch",
                 "next_action": "watch",
@@ -423,7 +323,7 @@ ai_worklog = ".omx/logs/ai-worklog.md"
                 "runner_iteration": 1,
                 "runner_iteration_cap": 1,
             })
-            paths.run_state.write_text(json.dumps(run_state, ensure_ascii=False, indent=2), encoding="utf-8")
+            paths.task_state.write_text(json.dumps(run_state, ensure_ascii=False, indent=2), encoding="utf-8")
 
             def fake_watch_local(**kwargs):
                 self.assertTrue(str(kwargs["metadata_path"]).endswith("local-r1.json"))
@@ -451,9 +351,9 @@ ai_worklog = ".omx/logs/ai-worklog.md"
 
             self.assertEqual(rc, 0)
             self.assertEqual(local_watch.call_count, 1)
-            final_run_state = load_run_state(paths.run_state)
+            final_run_state = load_task_state(paths.task_state)
             self.assertEqual(final_run_state["phase"], "reader")
-            self.assertEqual(final_run_state["execution_status"], "synced")
+            self.assertEqual(final_run_state["remote_status"], "synced")
 
 
 if __name__ == "__main__":

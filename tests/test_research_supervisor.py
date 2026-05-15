@@ -19,6 +19,7 @@ from scripts.research_supervisor import (
     launch_local_bash_file,
     parse_screen_ls,
     poll_local,
+    poll_remote,
     run_remote_bash_script,
     watch_local,
     write_watch_artifacts,
@@ -401,6 +402,32 @@ class ResearchSupervisorTests(unittest.TestCase):
             self.assertEqual(snapshot["backend"], "local")
             self.assertEqual(snapshot["watch_status"], "running")
             self.assertTrue(snapshot["runner_active"])
+
+    def test_poll_remote_uses_active_marker_when_screen_is_unavailable(self) -> None:
+        responses = iter([
+            "bash: line 1: screen: command not found\n",
+            "/remote/results/runner-001.active\n",
+            "0, 1024 MiB, 50 %\n",
+            "",
+        ])
+
+        with patch("scripts.research_supervisor.ssh_output", side_effect=lambda *args, **kwargs: next(responses)):
+            from scripts.research_supervisor import RemoteConfig
+
+            snapshot = poll_remote(
+                config=RemoteConfig(ssh_key="key", host="host", port=22),
+                screen_prefixes=["runner-001"],
+                result_dir="/remote/results",
+                assignment_id="A1",
+                run_id="runner-001",
+                snapshot_path=None,
+                event_log_path=None,
+                timeout=30,
+            )
+
+        self.assertEqual(snapshot["watch_status"], "running")
+        self.assertTrue(snapshot["runner_active"])
+        self.assertIn("runner-001.active", snapshot["remote_screen_names"])
 
 
 if __name__ == "__main__":

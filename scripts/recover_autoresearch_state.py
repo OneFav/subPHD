@@ -18,96 +18,103 @@ from scripts.research_autoloop import advance_run_state_after_watch
 from scripts.research_loop_contract import (
     atomic_write_json,
     bootstrap_state_artifacts,
-    default_run_state,
-    load_loop_state,
-    load_run_state,
+    default_task_state,
+    load_task_state,
     now_utc_iso,
+    resolve_execution_backend,
 )
 
 
-def sync_loop_state_with_run_state(paths, run_state: dict[str, Any], reason: str) -> dict[str, Any]:
-    loop_state = load_loop_state(paths.loop_state)
-    phase = run_state.get("phase")
-    if phase == "reader":
-        loop_state["next_agent"] = "reader"
-    elif phase == "runner":
-        loop_state["next_agent"] = "runner"
-    else:
-        loop_state["next_agent"] = "runner"
-    loop_state["last_transition_reason"] = reason
-    loop_state["updated_at"] = now_utc_iso()
-    atomic_write_json(paths.loop_state, loop_state)
-    return loop_state
-
-
-def load_or_repair_run_state(paths, config: dict[str, Any], reason: str) -> dict[str, Any]:
+def load_or_repair_task_state(paths, config: dict[str, Any], reason: str) -> dict[str, Any]:
     try:
-        return load_run_state(paths.run_state)
+        return load_task_state(paths.task_state)
     except Exception as exc:
-        repaired = default_run_state(config)
+        repaired = default_task_state(config)
         repaired["repair_count"] = 1
         repaired["last_error"] = f"{reason}: {exc}"
-        repaired["last_result_summary"] = f"Auto-repaired malformed run-state during recovery: {exc}"
+        repaired["last_result_summary"] = f"Auto-repaired malformed task-state during recovery: {exc}"
         repaired["updated_at"] = now_utc_iso()
-        atomic_write_json(paths.run_state, repaired)
-        sync_loop_state_with_run_state(paths, repaired, "recover_repaired_run_state")
+        atomic_write_json(paths.task_state, repaired)
         return repaired
 
 
-def write_run_state(paths, run_state: dict[str, Any], reason: str) -> None:
-    run_state["updated_at"] = now_utc_iso()
-    atomic_write_json(paths.run_state, run_state)
-    sync_loop_state_with_run_state(paths, run_state, reason)
+def write_task_state(paths, task_state: dict[str, Any], reason: str) -> None:
+    task_state["updated_at"] = now_utc_iso()
+    atomic_write_json(paths.task_state, task_state)
 
 
 def reset_to_reader(paths, reason: str = "manual_reset_to_reader") -> dict[str, Any]:
-    run_state = load_run_state(paths.run_state)
-    previous_phase = run_state.get("phase")
-    previous_run_id = run_state.get("run_id")
-    run_state["phase"] = "reader"
-    run_state["run_id"] = None
-    run_state["remote_status"] = "idle"
-    run_state["next_action"] = "reader"
-    run_state["runner_iteration"] = 0
-    run_state["last_error"] = None
-    run_state["last_result_summary"] = (
+    task_state = load_task_state(paths.task_state)
+    previous_phase = task_state.get("phase")
+    previous_run_id = task_state.get("run_id")
+    task_state["phase"] = "reader"
+    task_state["run_id"] = None
+    task_state["remote_status"] = "idle"
+    task_state["next_action"] = "reader"
+    task_state["runner_iteration"] = 0
+    task_state["last_error"] = None
+    task_state["last_result_summary"] = (
         f"State reset to reader from phase={previous_phase}, run_id={previous_run_id}, reason={reason}."
     )
-    write_run_state(paths, run_state, reason)
-    return run_state
+    write_task_state(paths, task_state, reason)
+    return task_state
 
 
 def resume_from_current_state(root: Path, config: dict[str, Any], paths) -> dict[str, Any]:
-    run_state = load_or_repair_run_state(paths, config, "resume_from_current_state")
-    if run_state.get("phase") != "watch":
-        sync_loop_state_with_run_state(paths, run_state, "recover_resume_no_phase_change")
-        return run_state
+    task_state = load_or_repair_task_state(paths, config, "resume_from_current_state")
+    if task_state.get("phase") != "watch":
+        return task_state
 
-    run_id = run_state.get("run_id")
-    remote = config.get("remote", {}) if isinstance(config, dict) else {}
-    snapshot = research_supervisor.poll_remote(
-        config=research_supervisor.RemoteConfig(
-            ssh_key=remote.get("ssh_key", ""),
-            host=remote.get("host", ""),
-            port=int(remote.get("port", 22)),
-        ),
-        screen_prefixes=[run_id] if run_id else [],
-        result_dir=remote.get("remote_result_dir", ""),
-        assignment_id="run-state",
-        run_id=run_id,
-        snapshot_path=paths.watch_snapshot,
-        event_log_path=paths.watch_events,
-        timeout=90,
-    )
-    updated = advance_run_state_after_watch(run_state, snapshot)
-    write_run_state(paths, updated, "recover_resume_watch")
+    run_id = task_state.get("run_id")
+    backend = resolve_execution_backend(config)
+
+    if backend == "local":
+        from scripts.research_supervisor import watch_local
+        local_cfg = config.get("local", {}) if isinstance(config, dict) else {}
+        local_pid_dir = Path(local_cfg.get("pid_dir", ".omx/state/local-runs"))
+        if not local_pid_dir.is_absolute():
+            local_pid_dir = root / local_pid_dir
+        local_result_dir = Path(local_cfg.get("result_dir", "results"))
+        if not local_result_dir.is_absolute():
+            local_result_dir = root / local_result_dir
+        metadata_path = local_pid_dir / f"{run_id}.json" if run_id else local_pid_dir / "latest.json"
+        snapshot = watch_local(
+            metadata_path=metadata_path,
+            result_dir=local_result_dir,
+            poll_seconds=90,
+            snapshot_path=paths.watch_snapshot,
+            event_log_path=paths.watch_events,
+            max_polls=1,
+            assignment_id="run-state",
+            run_id=run_id,
+            local_glob="*.json",
+        )
+    else:
+        remote = config.get("remote", {}) if isinstance(config, dict) else {}
+        snapshot = research_supervisor.poll_remote(
+            config=research_supervisor.RemoteConfig(
+                ssh_key=remote.get("ssh_key", ""),
+                host=remote.get("host", ""),
+                port=int(remote.get("port", 22)),
+            ),
+            screen_prefixes=[run_id] if run_id else [],
+            result_dir=remote.get("remote_result_dir", ""),
+            assignment_id="run-state",
+            run_id=run_id,
+            snapshot_path=paths.watch_snapshot,
+            event_log_path=paths.watch_events,
+            timeout=90,
+        )
+
+    updated = advance_run_state_after_watch(task_state, snapshot)
+    write_task_state(paths, updated, "recover_resume_watch")
     return updated
 
 
 def inspect_current_state(root: Path, config: dict[str, Any], paths, remote_check: bool = False) -> dict[str, Any]:
-    run_state = load_or_repair_run_state(paths, config, "inspect_current_state")
-    payload: dict[str, Any] = {"run_state": run_state}
-    if remote_check and run_state.get("phase") == "watch":
+    task_state = load_or_repair_task_state(paths, config, "inspect_current_state")
+    payload: dict[str, Any] = {"task_state": task_state}
+    if remote_check and task_state.get("phase") == "watch":
         remote = config.get("remote", {}) if isinstance(config, dict) else {}
         payload["remote_poll"] = research_supervisor.poll_remote(
             config=research_supervisor.RemoteConfig(
@@ -115,17 +122,17 @@ def inspect_current_state(root: Path, config: dict[str, Any], paths, remote_chec
                 host=remote.get("host", ""),
                 port=int(remote.get("port", 22)),
             ),
-            screen_prefixes=[run_state.get("run_id")] if run_state.get("run_id") else [],
+            screen_prefixes=[task_state.get("run_id")] if task_state.get("run_id") else [],
             result_dir=remote.get("remote_result_dir", ""),
             assignment_id="run-state",
-            run_id=run_state.get("run_id"),
+            run_id=task_state.get("run_id"),
             snapshot_path=paths.watch_snapshot,
             event_log_path=paths.watch_events,
             timeout=90,
         )
-    if run_state.get("phase") == "reader":
+    if task_state.get("phase") == "reader":
         payload["recommended_action"] = "resume_autoloop_or_launch_reader"
-    elif run_state.get("phase") == "runner":
+    elif task_state.get("phase") == "runner":
         payload["recommended_action"] = "resume_autoloop_or_launch_runner"
     else:
         payload["recommended_action"] = "resume_recovery_or_autoloop_watch"
@@ -133,7 +140,7 @@ def inspect_current_state(root: Path, config: dict[str, Any], paths, remote_chec
 
 
 def build_parser() -> argparse.ArgumentParser:
-    ap = argparse.ArgumentParser(description="Inspect, resume, or safely reset simplified research runtime state.")
+    ap = argparse.ArgumentParser(description="Inspect, resume, or safely reset simplified autoresearch runtime state.")
     ap.add_argument("--workdir", default=".")
     sub = ap.add_subparsers(dest="cmd", required=True)
 

@@ -6,39 +6,17 @@ from pathlib import Path
 
 from scripts.build_migration_pack import PACK_NAME, SCRIPT_FILES, build_migration_pack
 from scripts.research_agent_cli import load_project_config
-from scripts.research_loop_contract import load_run_state, read_json, read_validated_text
+from scripts.research_loop_contract import load_task_state, read_json, read_validated_text
 
 
 class BuildMigrationPackTests(unittest.TestCase):
-    def test_repo_docs_point_to_subphd_skills_for_understanding_and_program_edits(self) -> None:
-        readme = Path("README.md").read_text(encoding="utf-8").lower()
-        readme_zh = Path("README.zh-CN.md").read_text(encoding="utf-8").lower()
-        index = Path("index.md").read_text(encoding="utf-8").lower()
-        for text in (readme, readme_zh, index):
-            self.assertIn("subphd-run-disclosure", text)
-            self.assertIn("subphd-program-refinement", text)
-        self.assertIn("https://github.com/onefav/subphd/blob/main/index.md", readme)
-        self.assertIn("https://github.com/onefav/subphd/blob/main/index.md", readme_zh)
-        self.assertIn("install the project locally", readme)
-        self.assertIn("安装项目到本地", readme_zh)
-
     def test_build_migration_pack_creates_fresh_template_with_preserved_ssh_config(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "source"
             root.mkdir(parents=True, exist_ok=True)
             (root / "scripts").mkdir(parents=True, exist_ok=True)
-            (root / "skills" / "subphd-run-disclosure").mkdir(parents=True, exist_ok=True)
-            (root / "skills" / "subphd-program-refinement").mkdir(parents=True, exist_ok=True)
-            for skill in ["subphd-inspect", "subphd-control", "subphd-watch"]:
-                (root / "skills" / skill).mkdir(parents=True, exist_ok=True)
-                (root / "skills" / skill / "SKILL.md").write_text(f"---\nname: {skill}\ndescription: optional external carrier-agent example\n---\n", encoding="utf-8")
-            (root / "docs").mkdir(parents=True, exist_ok=True)
-            (root / "docs" / "subphd-agent-protocol.md").write_text("# Protocol\noptional external carrier-agent\n", encoding="utf-8")
             for name in SCRIPT_FILES:
                 (root / "scripts" / name).write_text("# placeholder\n", encoding="utf-8")
-            (root / "index.md").write_text("# index\nUse subphd-run-disclosure and subphd-program-refinement.\nOptional external carrier-agent skills: subphd-inspect, subphd-control, subphd-watch. See docs/subphd-agent-protocol.md.\n", encoding="utf-8")
-            (root / "skills" / "subphd-run-disclosure" / "SKILL.md").write_text("---\nname: subphd-run-disclosure\n---\n", encoding="utf-8")
-            (root / "skills" / "subphd-program-refinement" / "SKILL.md").write_text("---\nname: subphd-program-refinement\n---\n", encoding="utf-8")
             (root / "research_agent.toml").write_text(
                 """
 project_name = "demo"
@@ -50,7 +28,7 @@ default_poll_seconds = 300
 [remote]
 ssh_key = "C:/keys/id_ed25519"
 host = "root@example.com"
-port = 55040
+port = 22222
 remote_code_dir = "/remote/code/demo"
 remote_result_dir = "/remote/code/demo/results"
 gpu_count = 4
@@ -86,13 +64,11 @@ gpu_count = 4
             config = load_project_config(pack_root)
             self.assertEqual(config["remote"]["ssh_key"], "C:/keys/id_ed25519")
             self.assertEqual(config["remote"]["host"], "root@example.com")
-            self.assertEqual(config["remote"]["port"], 55040)
+            self.assertEqual(config["remote"]["port"], 22222)
             self.assertEqual(config["runtime"]["root"], ".subphd")
-            run_state = load_run_state(pack_root / ".subphd" / "state" / "run-state.json")
-            self.assertEqual(run_state["phase"], "reader")
-            self.assertEqual(run_state["next_action"], "reader")
-            observability = read_json(pack_root / ".subphd" / "state" / "agent-observability.json")
-            self.assertEqual(observability["segments"], [])
+            task_state = load_task_state(pack_root / ".subphd" / "state" / "task-state.json")
+            self.assertEqual(task_state["phase"], "reader")
+            self.assertEqual(task_state["next_action"], "reader")
             person_program = read_validated_text(pack_root / "person_program.md", "person_program")
             self.assertIn("only required human-authored control document", person_program)
             agent_program = read_validated_text(pack_root / "agent_program.md", "agent_program")
@@ -106,44 +82,16 @@ gpu_count = 4
             self.assertTrue((pack_root / "roles" / "runner" / "skills" / "monitor-experiment" / "SKILL.md").exists())
             self.assertTrue((pack_root / "roles" / "runner" / "skills" / "training-check" / "SKILL.md").exists())
             self.assertFalse((pack_root / "workspaces").exists())
+            self.assertTrue((pack_root / "README-migrate.md").exists())
             self.assertTrue((pack_root / "README.md").exists())
             self.assertTrue((pack_root / "README.zh-CN.md").exists())
-            self.assertFalse((pack_root / "README-migrate.md").exists())
             self.assertTrue((pack_root / "start.bat").exists())
             self.assertTrue((pack_root / "resume.bat").exists())
-            self.assertTrue((pack_root / "index.md").exists())
-            self.assertTrue((pack_root / "skills" / "subphd-run-disclosure" / "SKILL.md").exists())
-            self.assertTrue((pack_root / "skills" / "subphd-program-refinement" / "SKILL.md").exists())
-            for skill in ["subphd-inspect", "subphd-control", "subphd-watch"]:
-                self.assertTrue((pack_root / "skills" / skill / "SKILL.md").exists())
-            self.assertTrue((pack_root / "docs" / "subphd-agent-protocol.md").exists())
             self.assertIn('set "HOURS=1"', (pack_root / "start.bat").read_text(encoding="utf-8"))
             self.assertIn('set "HOURS=1"', (pack_root / "resume.bat").read_text(encoding="utf-8"))
-            readme = (pack_root / "README.md").read_text(encoding="utf-8")
-            self.assertIn("subphd-run-disclosure", readme.lower())
-            self.assertIn("subphd-program-refinement", readme.lower())
-            self.assertIn("subphd-inspect", readme.lower())
-            self.assertIn("subphd-control", readme.lower())
-            self.assertIn("subphd-watch", readme.lower())
-            self.assertIn("optional external carrier-agent", readme.lower())
-            self.assertIn("https://github.com/onefav/subphd/blob/main/index.md", readme.lower())
-            self.assertIn("install the project locally", readme.lower())
-            readme_zh = (pack_root / "README.zh-CN.md").read_text(encoding="utf-8")
-            self.assertIn("subphd-run-disclosure", readme_zh.lower())
-            self.assertIn("subphd-program-refinement", readme_zh.lower())
-            self.assertIn("subphd-inspect", readme_zh.lower())
-            self.assertIn("subphd-control", readme_zh.lower())
-            self.assertIn("subphd-watch", readme_zh.lower())
-            self.assertIn("optional external carrier-agent", readme_zh.lower())
-            self.assertIn("https://github.com/onefav/subphd/blob/main/index.md", readme_zh.lower())
-            index = (pack_root / "index.md").read_text(encoding="utf-8")
-            self.assertIn("subphd-run-disclosure", index.lower())
-            self.assertIn("subphd-program-refinement", index.lower())
-            self.assertIn("optional external carrier-agent", index.lower())
-            self.assertIn("subphd-inspect", index.lower())
-            self.assertIn("subphd-control", index.lower())
-            self.assertIn("subphd-watch", index.lower())
-            self.assertIn("docs/subphd-agent-protocol.md", index.lower())
+            migrate_readme = (pack_root / "README-migrate.md").read_text(encoding="utf-8")
+            self.assertIn("role-local", migrate_readme.lower())
+            self.assertIn("authoritative handoff", migrate_readme.lower())
 
 
 if __name__ == "__main__":
