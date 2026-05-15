@@ -524,6 +524,71 @@ def normalize_post_role_run_state(role: str, task_state: dict[str, Any]) -> dict
     return normalized
 
 
+def validate_sprint_contract(sc: dict[str, Any] | None) -> tuple[bool, list[str]]:
+    """Validate a sprint_contract, returning (ok, warnings).
+
+    Rules:
+    - sprint_type is required
+    - success_condition must include at least one metric condition
+    - Pure artifact conditions only allowed for sprint_type="terminal_collection"
+    - Legacy string success_condition is accepted with a warning
+
+    Returns (True, []) if the contract looks valid.
+    Returns (False, [warnings]) if issues found (non-blocking).
+    """
+    if not isinstance(sc, dict) or not sc:
+        return False, ["sprint_contract is missing or empty"]
+
+    warnings: list[str] = []
+    sc_type = sc.get("sprint_type")
+
+    if not sc_type:
+        return False, warnings + ["sprint_contract.sprint_type is missing — should be one of: diagnostic, construction, sweep, terminal_collection"]
+    if sc_type not in ("diagnostic", "construction", "sweep", "terminal_collection"):
+        warnings.append(
+            f"sprint_contract.sprint_type={sc_type!r} is not recognized — should be one of: diagnostic, construction, sweep, terminal_collection"
+        )
+
+    success = sc.get("success_condition")
+    if not success:
+        return False, warnings + ["sprint_contract.success_condition is missing"]
+
+    # Legacy string success_condition
+    if isinstance(success, str):
+        return True, warnings + [
+            "sprint_contract.success_condition is a legacy string — consider upgrading to structured format with at least one metric condition"
+        ]
+
+    if not isinstance(success, dict):
+        return False, warnings + [f"sprint_contract.success_condition has unexpected type: {type(success).__name__}"]
+
+    conditions = success.get("conditions") or []
+    if not isinstance(conditions, list):
+        return False, warnings + ["sprint_contract.success_condition.conditions is not a list"]
+
+    has_metric = any(
+        isinstance(c, dict) and c.get("metric")
+        for c in conditions
+    )
+    has_artifact = any(
+        isinstance(c, dict) and "artifact" in c
+        for c in conditions
+    )
+
+    if not has_metric:
+        if sc_type == "terminal_collection":
+            if has_artifact:
+                return True, warnings  # terminal with artifact-only is OK
+            return False, warnings + [
+                "sprint_contract.success_condition has no metric or artifact conditions"
+            ]
+        else:
+            return False, warnings + [
+                f"sprint_contract.success_condition must include at least one metric condition when sprint_type={sc_type!r}. Pure artifact conditions are only allowed for sprint_type='terminal_collection'."
+            ]
+
+    return True, warnings
+
 
 
 def consume_pending_human_prompt_if_matched(run_state: dict[str, Any], *, matched_prompt: dict[str, Any] | None) -> dict[str, Any]:
@@ -572,6 +637,25 @@ def main() -> int:
         ensure_runner_backend_requirements(config)
         if args.task:
             raise ValueError("runner mode rejects ad-hoc local task injection; use reader-produced artifacts only")
+
+    # Validate sprint_contract if present
+    sc = task_state.get("sprint_contract")
+    if sc:
+        ok, sc_warnings = validate_sprint_contract(sc)
+        if not ok:
+            append_ai_worklog_entry(
+                paths.ai_worklog,
+                {
+                    "role": role,
+                    "start_time": now_utc_iso(),
+                    "current_objective": task_state.get("current_objective", ""),
+                    "success_condition": f"VALIDATION WARNING: {'; '.join(sc_warnings)}",
+                    "next_action": task_state.get("next_action", ""),
+                },
+            )
+            print(f"[{role}] sprint_contract validation: {'; '.join(sc_warnings)}")
+        elif sc_warnings:
+            print(f"[{role}] sprint_contract advisory: {'; '.join(sc_warnings)}")
 
     prompt_hash = compute_prompt_contract_hash(
         person_program_text, agent_program_text, role, task_state

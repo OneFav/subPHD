@@ -201,5 +201,156 @@ ai_worklog = ".omx/logs/ai-worklog.md"
         self.assertEqual(result["last_applied_human_prompt"]["text"], "check OOM")
 
 
+    # ──────────────────────────────────────────────
+    # Task 2: Reader role Sprint Contract assertions
+    # ──────────────────────────────────────────────
+
+    def test_reader_role_surface_mandates_metric_in_success_condition(self):
+        """Reader 角色表面要求 success_condition 必须包含 metric 条件"""
+        surface = Path("roles/reader/AGENTS.md").read_text(encoding="utf-8")
+        self.assertIn("metric", surface.lower())
+        self.assertIn("success_condition", surface)
+        self.assertIn("artifact", surface.lower())
+
+    def test_reader_role_surface_has_sprint_types(self):
+        """Reader 角色表面定义了 sprint_type 分类"""
+        surface = Path("roles/reader/AGENTS.md").read_text(encoding="utf-8")
+        self.assertIn("sprint_type", surface)
+        self.assertIn("diagnostic", surface)
+        self.assertIn("construction", surface)
+        self.assertIn("sweep", surface)
+        self.assertIn("terminal_collection", surface)
+
+    def test_reader_role_surface_has_iterability_check(self):
+        """Reader 角色表面要求可迭代性自检"""
+        surface = Path("roles/reader/AGENTS.md").read_text(encoding="utf-8")
+        self.assertIn("iterab", surface.lower())  # iterability / iterable
+
+    def test_reader_role_surface_no_longer_sets_done_directly(self):
+        """Reader 角色表面不再手动设 phase=done（autoloop 处理）"""
+        surface = Path("roles/reader/AGENTS.md").read_text(encoding="utf-8")
+        self.assertIn("autoloop", surface.lower())
+        self.assertIn("evaluates", surface.lower())
+
+    # ──────────────────────────────────────────────
+    # Task 1: Runner role Sprint Contract assertions
+    # ──────────────────────────────────────────────
+
+    def test_runner_role_surface_mandates_metrics_increment(self):
+        """Runner 角色表面要求每轮更新 sprint_contract.metrics"""
+        surface = Path("roles/runner/AGENTS.md").read_text(encoding="utf-8")
+        self.assertIn("metrics", surface)
+        self.assertIn("sprint_contract", surface)
+        self.assertTrue(
+            "update" in surface.lower() and "metric" in surface.lower(),
+            "Runner role surface must mandate metrics updates"
+        )
+
+    def test_runner_role_surface_forbids_done_abandoned(self):
+        """Runner 角色表面禁止直接设置 phase=done/abandoned"""
+        surface = Path("roles/runner/AGENTS.md").read_text(encoding="utf-8")
+        self.assertIn("MUST NOT", surface)
+        self.assertNotIn("Sprint succeeded", surface)
+        self.assertNotIn("Sprint failed, cannot recover", surface)
+        self.assertIn("needs_human", surface.lower())
+
+    def test_runner_role_surface_mentions_research_question(self):
+        """Runner 角色表面引导回答 research_question，非完成步骤清单"""
+        surface = Path("roles/runner/AGENTS.md").read_text(encoding="utf-8")
+        self.assertIn("research_question", surface)
+        self.assertIn("hypothesis", surface.lower())
+
+    def test_runner_role_surface_has_simplified_phase_table(self):
+        """Runner 角色表面的 phase 转换表只含 watch/runner/reader/needs_human"""
+        surface = Path("roles/runner/AGENTS.md").read_text(encoding="utf-8")
+        self.assertIn("watch", surface.lower())
+        self.assertIn("reader", surface.lower())
+        self.assertNotIn('"done"', surface)
+        self.assertNotIn('"abandoned"', surface)
+
+    # ──────────────────────────────────────────────
+    # Task 3: Sprint Contract validation tests
+    # ──────────────────────────────────────────────
+
+    def test_validate_sprint_contract_rejects_pure_artifact_non_terminal(self):
+        """non-terminal sprint 不允许纯 artifact success_condition"""
+        from scripts.research_agent_cli import validate_sprint_contract
+        sc = {
+            "sprint_id": "sprint-1",
+            "sprint_type": "diagnostic",
+            "success_condition": {
+                "mode": "all",
+                "conditions": [
+                    {"artifact": "results/x.json", "exists": True}
+                ]
+            }
+        }
+        ok, warnings = validate_sprint_contract(sc)
+        self.assertFalse(ok)
+        self.assertTrue(any("metric" in w.lower() for w in warnings))
+
+    def test_validate_sprint_contract_accepts_metric_condition(self):
+        """包含 metric 条件的 success_condition 应该是有效的"""
+        from scripts.research_agent_cli import validate_sprint_contract
+        sc = {
+            "sprint_id": "sprint-1",
+            "sprint_type": "diagnostic",
+            "success_condition": {
+                "mode": "all",
+                "conditions": [
+                    {"metric": "acc", "op": ">=", "threshold": 0.9},
+                    {"artifact": "results/x.json", "exists": True}
+                ]
+            }
+        }
+        ok, warnings = validate_sprint_contract(sc)
+        self.assertTrue(ok)
+
+    def test_validate_sprint_contract_allows_pure_artifact_for_terminal(self):
+        """terminal_collection 类型允许纯 artifact success_condition"""
+        from scripts.research_agent_cli import validate_sprint_contract
+        sc = {
+            "sprint_id": "sprint-final",
+            "sprint_type": "terminal_collection",
+            "success_condition": {
+                "mode": "all",
+                "conditions": [
+                    {"artifact": "results/paper_packet.json", "exists": True}
+                ]
+            }
+        }
+        ok, warnings = validate_sprint_contract(sc)
+        self.assertTrue(ok)
+
+    def test_validate_sprint_contract_handles_legacy_string_condition(self):
+        """旧版 string success_condition 返回警告但不阻塞"""
+        from scripts.research_agent_cli import validate_sprint_contract
+        sc = {
+            "sprint_id": "sprint-1",
+            "sprint_type": "diagnostic",
+            "success_condition": "causal probe specificity delta >= 0.05"
+        }
+        ok, warnings = validate_sprint_contract(sc)
+        # Legacy string: should warn about missing structured condition
+        self.assertTrue(ok)  # Not a hard failure
+        self.assertTrue(len(warnings) > 0)
+
+    def test_validate_sprint_contract_requires_sprint_type(self):
+        """缺少 sprint_type 的 sprint 应该产生警告"""
+        from scripts.research_agent_cli import validate_sprint_contract
+        sc = {
+            "sprint_id": "sprint-1",
+            "success_condition": {
+                "mode": "all",
+                "conditions": [
+                    {"metric": "acc", "op": ">=", "threshold": 0.9}
+                ]
+            }
+        }
+        ok, warnings = validate_sprint_contract(sc)
+        self.assertFalse(ok)
+        self.assertTrue(any("sprint_type" in w.lower() for w in warnings))
+
+
 if __name__ == "__main__":
     unittest.main()
