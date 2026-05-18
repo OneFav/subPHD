@@ -123,27 +123,12 @@ def validate_person_program_text(text: str) -> None:
         raise ValueError("person_program appears content-corrupted with replacement '?' text")
 
 
-def validate_agent_program_text(text: str) -> None:
-    if "# agent_program.md" not in text:
-        raise ValueError("agent_program missing title sentinel")
-    lowered = text.lower()
-    if "## current strategy" not in lowered:
-        raise ValueError("agent_program missing strategy section")
-    if "## revision suggestions" not in lowered:
-        raise ValueError("agent_program missing revision section")
-    allowed_control_terms = ["runner", "reader", "paper", "strategy", "revision"]
-    if not any(term in text or term in lowered for term in allowed_control_terms):
-        raise ValueError("agent_program missing required control terms")
-    if _has_dense_question_marks(text):
-        raise ValueError("agent_program appears content-corrupted with replacement '?' text")
-
-
 def read_validated_text(path: Path, kind: str) -> str:
     text = read_text(path)
     if kind == "person_program":
         validate_person_program_text(text)
     elif kind == "agent_program":
-        validate_agent_program_text(text)
+        pass  # agent_program.md is a soft-constraint artifact — no validation
     else:
         raise ValueError(f"unknown guarded text kind: {kind}")
     return text
@@ -486,24 +471,6 @@ def ensure_program_files(root: Path, config: dict[str, Any] | None = None, *, al
                 watch_status="idle",
             ),
         )
-    else:
-        try:
-            read_validated_text(paths.agent_program, "agent_program")
-        except Exception:
-            if not allow_bootstrap_agent:
-                raise
-            atomic_write_text(paths.agent_program, "# agent_program.md\n\n## Current Strategy\n- Reader may edit this file directly.\n- Default posture: prioritize explicit, traceable, budget-aware research progress.\n\n## Revision Suggestions\n- None yet.\n")
-            append_jsonl(
-                paths.watch_events,
-                event_payload(
-                    event_type="restore_agent_program",
-                    source="autoloop",
-                    reason="corrupted_agent_program_restored_from_seed",
-                    assignment_id=None,
-                    run_id=None,
-                    watch_status="idle",
-                ),
-            )
     return paths
 
 

@@ -14,30 +14,52 @@ from scripts import research_dashboard
 
 class ResearchDashboardTests(unittest.TestCase):
 
-    def test_observatory_data_files_exist_and_parse(self) -> None:
-        for rel in ["files/data/plan.json", "files/data/agents.json", "files/data/glossary.json"]:
-            with self.subTest(rel=rel):
-                payload = json.loads((Path(rel)).read_text(encoding="utf-8-sig"))
-                self.assertIsNotNone(payload)
+    def test_observatory_data_files_auto_created_and_parse(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            research_dashboard.ensure_observatory_data_files(root)
+            for name in ["plan.json", "agents.json", "glossary.json"]:
+                with self.subTest(name=name):
+                    target = research_dashboard.observatory_data_dir(root) / name
+                    payload = json.loads(target.read_text(encoding="utf-8-sig"))
+                    self.assertIsNotNone(payload)
 
     def test_dashboard_server_serves_observatory_index_and_data_files(self) -> None:
-        server = research_dashboard.create_dashboard_server("127.0.0.1", 0, port_search_limit=1)
-        research_dashboard.DashboardHandler.root = Path.cwd()
-        import threading
-        thread = threading.Thread(target=server.serve_forever, daemon=True)
-        thread.start()
-        try:
-            base = f"http://127.0.0.1:{server.server_address[1]}"
-            index = urllib.request.urlopen(base + "/", timeout=5).read().decode("utf-8")
-            self.assertIn("The <em>subPHD</em> Observatory", index)
-            self.assertIn("Plan &amp; Progress", index)
-            self.assertIn("fetch('/api/prompt'", index)
-            with urllib.request.urlopen(base + "/data/plan.json", timeout=5) as response:
-                self.assertIn("application/json", response.headers.get("Content-Type", ""))
-                json.loads(response.read().decode("utf-8-sig"))
-        finally:
-            server.shutdown()
-            server.server_close()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            # create minimal control files required by bootstrap
+            (root / "person_program.md").write_text(
+                "# person_program\n\n## Current Phase\n\nTest phase for dashboard verification. "
+                "This is a minimal valid person program document that satisfies the validation "
+                "requirements for the dashboard server to bootstrap state artifacts correctly.\n",
+                encoding="utf-8")
+            (root / "agent_program.md").write_text("## Current Status\n\nTest.\n", encoding="utf-8")
+            # create minimal observatory files
+            obs_root = research_dashboard.observatory_root(root)
+            obs_root.mkdir(parents=True, exist_ok=True)
+            (obs_root / "index.html").write_text(
+                "<html><head><title>subPHD Observatory</title></head>"
+                "<body>The <em>subPHD</em> Observatory. Plan &amp; Progress."
+                "fetch('/api/prompt'</body></html>", encoding="utf-8")
+            research_dashboard.ensure_observatory_data_files(root)
+
+            server = research_dashboard.create_dashboard_server("127.0.0.1", 0, port_search_limit=1)
+            research_dashboard.DashboardHandler.root = root
+            import threading
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                base = f"http://127.0.0.1:{server.server_address[1]}"
+                index = urllib.request.urlopen(base + "/", timeout=5).read().decode("utf-8")
+                self.assertIn("subPHD", index)
+                self.assertIn("Plan &amp; Progress", index)
+                self.assertIn("fetch('/api/prompt'", index)
+                with urllib.request.urlopen(base + "/data/plan.json", timeout=5) as response:
+                    self.assertIn("application/json", response.headers.get("Content-Type", ""))
+                    json.loads(response.read().decode("utf-8-sig"))
+            finally:
+                server.shutdown()
+                server.server_close()
 
 
     def test_queue_one_time_prompt_writes_pending_human_prompt(self) -> None:

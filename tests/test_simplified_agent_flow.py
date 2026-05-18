@@ -114,8 +114,9 @@ ai_worklog = ".omx/logs/ai-worklog.md"
 
             self.assertEqual(rc, 0)
             final_state = load_task_state(paths.task_state)
-            self.assertEqual(final_state["phase"], "runner")
-            self.assertEqual(final_state["next_action"], "runner")
+            # Reader stays in reader phase for direct execution (no forced transition to runner)
+            self.assertEqual(final_state["phase"], "reader")
+            self.assertEqual(final_state["next_action"], "reader")
             text = paths.ai_worklog.read_text(encoding="utf-8")
             self.assertIn("reader", text)
             self.assertIn("reader objective", text)
@@ -187,9 +188,127 @@ ai_worklog = ".omx/logs/ai-worklog.md"
         result = normalize_post_role_run_state("runner", state)
         self.assertEqual(result["phase"], "reader")
 
-    def test_normalize_reader_always_transitions_to_runner(self):
+    # ── Sprint-contract-driven runner iteration (non-watch path) ──
+
+    def test_normalize_runner_iterates_when_success_not_met_and_budget_remains(self):
+        """Runner stays runner when sprint contract metrics don't meet success condition yet."""
         from scripts.research_agent_cli import normalize_post_role_run_state
+        state = {
+            "phase": "reader",  # runner forgot to set phase
+            "runner_iteration": 0,
+            "runner_iteration_cap": 3,
+            "sprint_contract": {
+                "sprint_type": "construction",
+                "success_condition": {
+                    "mode": "all",
+                    "conditions": [{"metric": "target_accuracy", "op": ">=", "threshold": 0.9}],
+                },
+                "metrics": {"target_accuracy": 0.72},  # not met
+            },
+        }
+        result = normalize_post_role_run_state("runner", state)
+        self.assertEqual(result["phase"], "runner")
+        self.assertEqual(result["next_action"], "runner")
+        self.assertEqual(result["runner_iteration"], 1)  # incremented
+        self.assertIsNone(result.get("runner_done_reason"))
+
+    def test_normalize_runner_marks_done_when_sprint_success_met(self):
+        """Runner sets phase=done when sprint contract success condition is satisfied."""
+        from scripts.research_agent_cli import normalize_post_role_run_state
+        state = {
+            "phase": "reader",
+            "runner_iteration": 1,
+            "runner_iteration_cap": 3,
+            "sprint_contract": {
+                "sprint_type": "construction",
+                "success_condition": {
+                    "mode": "all",
+                    "conditions": [
+                        {"metric": "target_accuracy", "op": ">=", "threshold": 0.9},
+                    ],
+                },
+                "metrics": {"target_accuracy": 0.94},
+            },
+        }
+        result = normalize_post_role_run_state("runner", state)
+        self.assertEqual(result["phase"], "done")
+        self.assertIn("sprint_success", result.get("runner_done_reason", ""))
+
+    def test_normalize_runner_goes_reader_when_sprint_cap_exhausted(self):
+        """Runner goes to reader when success not met and cap exhausted."""
+        from scripts.research_agent_cli import normalize_post_role_run_state
+        state = {
+            "phase": "reader",
+            "runner_iteration": 2,  # next increment makes it 3
+            "runner_iteration_cap": 3,
+            "sprint_contract": {
+                "sprint_type": "construction",
+                "success_condition": {
+                    "mode": "all",
+                    "conditions": [{"metric": "target_accuracy", "op": ">=", "threshold": 0.9}],
+                },
+                "metrics": {"target_accuracy": 0.72},  # still not met
+            },
+        }
+        result = normalize_post_role_run_state("runner", state)
+        # runner_iteration 2 + 1 = 3, cap is 3, so exhausted
+        self.assertEqual(result["runner_iteration"], 3)
+        self.assertEqual(result["phase"], "reader")
+        self.assertIn("cap_exhausted", result.get("runner_done_reason", ""))
+
+    def test_normalize_runner_watch_overrides_sprint_iteration(self):
+        """Runner's explicit watch phase passes through regardless of sprint state."""
+        from scripts.research_agent_cli import normalize_post_role_run_state
+        state = {
+            "phase": "watch",
+            "next_action": "watch",
+            "runner_iteration": 0,
+            "runner_iteration_cap": 3,
+            "sprint_contract": {
+                "sprint_type": "construction",
+                "success_condition": {
+                    "mode": "all",
+                    "conditions": [{"metric": "target_accuracy", "op": ">=", "threshold": 0.9}],
+                },
+                "metrics": {"target_accuracy": 0.5},
+            },
+        }
+        result = normalize_post_role_run_state("runner", state)
+        # watch takes priority — sprint iteration is not triggered
+        self.assertEqual(result["phase"], "watch")
+
+    def test_normalize_runner_without_sprint_contract_falls_back_to_explicit_choice(self):
+        """Without a sprint_contract, old fallback behavior still works."""
+        from scripts.research_agent_cli import normalize_post_role_run_state
+        # Runner explicitly wants runner, cap not exhausted
+        state = {"phase": "runner", "runner_iteration": 1, "runner_iteration_cap": 4}
+        result = normalize_post_role_run_state("runner", state)
+        self.assertEqual(result["phase"], "runner")
+
+        # Cap exhausted → reader
+        state2 = {"phase": "runner", "runner_iteration": 4, "runner_iteration_cap": 4}
+        result2 = normalize_post_role_run_state("runner", state2)
+        self.assertEqual(result2["phase"], "reader")
+
+    def test_normalize_reader_respects_own_phase_choice(self):
+        """Reader can stay in reader for direct execution; framework respects the choice."""
+        from scripts.research_agent_cli import normalize_post_role_run_state
+        # Reader explicitly stays reader → respected
         state = {"phase": "reader", "next_action": "reader"}
+        result = normalize_post_role_run_state("reader", state)
+        self.assertEqual(result["phase"], "reader")
+
+    def test_normalize_reader_can_set_runner_phase(self):
+        """Reader can still delegate to runner when it chooses."""
+        from scripts.research_agent_cli import normalize_post_role_run_state
+        state = {"phase": "runner", "next_action": "runner"}
+        result = normalize_post_role_run_state("reader", state)
+        self.assertEqual(result["phase"], "runner")
+
+    def test_normalize_reader_defaults_to_runner_when_no_phase_set(self):
+        """If reader doesn't set a phase, default to runner."""
+        from scripts.research_agent_cli import normalize_post_role_run_state
+        state = {}
         result = normalize_post_role_run_state("reader", state)
         self.assertEqual(result["phase"], "runner")
 

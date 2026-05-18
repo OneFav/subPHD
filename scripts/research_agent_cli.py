@@ -29,6 +29,7 @@ from scripts.research_loop_contract import (
     append_ai_worklog_entry,
     compact_text_summary,
     compute_prompt_contract_hash,
+    evaluate_success_condition,
     load_task_state,
     now_utc_iso,
     read_validated_text,
@@ -485,40 +486,72 @@ def write_launch_metadata(
 def normalize_post_role_run_state(role: str, task_state: dict[str, Any]) -> dict[str, Any]:
     """Normalize state after a role run completes.
 
-    Reader always transitions to runner.
-    Runner: respect runner's own phase/next_action choice for watch, terminal,
-    or continuation within cap. Only force to reader when cap is exhausted or
-    runner didn't make a choice.
+    Reader: respect reader's own phase/next_action choice, allowing it to stay in
+    reader for direct execution (paper writing, analysis, collection).
+    Only force to runner when reader didn't make an explicit choice.
+
+    Runner: evaluate sprint contract success_condition against current metrics.
+    If satisfied → done (autoloop auto-advances to reader for next sprint).
+    If not satisfied and runner_iteration < runner_iteration_cap → runner (iterate).
+    If cap exhausted → reader (hand back for reader decision).
+    watch/needs_human pass through directly.
     """
     normalized = dict(task_state)
     if role == "reader":
+        if normalized.get("phase"):
+            return normalized
         normalized["phase"] = "runner"
         normalized["next_action"] = "runner"
         return normalized
 
-    # Runner post-processing: respect runner's own choice
+    # --- Runner post-processing ---
     runner_phase = normalized.get("phase")
-    runner_next = normalized.get("next_action")
 
-    # Runner must NOT declare sprint done/abandoned — autoloop decides.
-    # Only "needs_human" passes through directly.
     if runner_phase == "needs_human":
         return normalized
-    if runner_phase in {"done", "abandoned"}:
-        normalized["phase"] = "reader"
-        normalized["next_action"] = "reader"
+
+    # Runner explicitly wants watch — respect it (autoloop handles watch→runner routing)
+    if runner_phase == "watch" or normalized.get("next_action") == "watch":
         return normalized
 
-    # Runner explicitly wants watch — respect it
-    if runner_phase == "watch" or runner_next == "watch":
-        return normalized
+    # Evaluate sprint contract to decide next phase
+    sc = normalized.get("sprint_contract")
+    if isinstance(sc, dict):
+        sc_success = sc.get("success_condition")
+        if isinstance(sc_success, dict):
+            satisfied, details = evaluate_success_condition(sc_success, normalized)
 
-    # Runner wants to stay runner and cap not exhausted — respect it
-    if runner_phase == "runner" or runner_next == "runner":
+            if satisfied:
+                normalized["phase"] = "done"
+                normalized["next_action"] = "done"
+                normalized["runner_done_reason"] = f"sprint_success: {details}"
+                normalized["updated_at"] = now_utc_iso()
+                return normalized
+
+            # Not satisfied. Increment iteration count (this run just completed).
+            runner_iter = int(normalized.get("runner_iteration", 0)) + 1
+            normalized["runner_iteration"] = runner_iter
+            runner_cap = int(normalized.get("runner_iteration_cap", 1))
+
+            if runner_iter < runner_cap:
+                normalized["phase"] = "runner"
+                normalized["next_action"] = "runner"
+                normalized["updated_at"] = now_utc_iso()
+                return normalized
+
+            # Cap exhausted, not satisfied
+            normalized["phase"] = "reader"
+            normalized["next_action"] = "reader"
+            normalized["runner_done_reason"] = "runner_cap_exhausted_without_success"
+            normalized["updated_at"] = now_utc_iso()
+            return normalized
+
+    # No structured sprint_contract — fall back to runner's explicit choice
+    if runner_phase == "runner" or normalized.get("next_action") == "runner":
         if int(normalized.get("runner_iteration", 0)) < int(normalized.get("runner_iteration_cap", 1)):
             return normalized
 
-    # Default: transition to reader (cap exhausted or no explicit choice)
+    # Default: transition to reader
     normalized["phase"] = "reader"
     normalized["next_action"] = "reader"
     return normalized

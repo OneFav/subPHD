@@ -69,12 +69,29 @@ def _write_bytes(handler: BaseHTTPRequestHandler, payload: bytes, content_type: 
     handler.wfile.write(payload)
 
 
+def _refresh_index_html(root: Path) -> None:
+    """Regenerate index.html from current autoloop state so the dashboard never 404s."""
+    ensure_observatory_data_files(root)
+    config = load_project_config(root)
+    paths = bootstrap_state_artifacts(root, config)
+    task_state = load_task_state(paths.task_state)
+    segments = _read_autoloop_segments(paths.autoloop_root)
+    rows = build_gantt_rows({"segments": segments})
+    pending = task_state.get("pending_human_prompt")
+    html = build_dashboard_html(rows=rows, pending_prompt=pending)
+    obs_root = observatory_root(root)
+    obs_root.mkdir(parents=True, exist_ok=True)
+    (obs_root / "index.html").write_text(html, encoding="utf-8")
+
+
 def _serve_observatory_file(handler: BaseHTTPRequestHandler, root: Path, request_path: str) -> bool:
     ensure_observatory_data_files(root)
     parsed = urllib.parse.urlparse(request_path)
     path = parsed.path
     if path in {"", "/"}:
         target = observatory_root(root) / "index.html"
+        if not target.exists():
+            _refresh_index_html(root)
         content_type = "text/html; charset=utf-8"
     elif path.startswith("/data/"):
         requested = path.removeprefix("/data/")

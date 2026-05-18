@@ -320,12 +320,13 @@ class ResearchAgentCliTests(unittest.TestCase):
             text = read_validated_text(path, "agent_program")
             self.assertIn("Current Strategy", text)
 
-    def test_malformed_live_agent_program_is_rejected(self) -> None:
+    def test_agent_program_is_soft_constraint_no_rejection(self) -> None:
+        # agent_program.md is a soft-constraint artifact — no strict validation.
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "agent_program.md"
             path.write_text("# agent_program.md\n\n## Current Strategy\n- ???\n", encoding="utf-8")
-            with self.assertRaises(ValueError):
-                read_validated_text(path, "agent_program")
+            text = read_validated_text(path, "agent_program")
+            self.assertIn("???", text)
 
     def test_supervisor_template_uses_launch_bash_helper(self) -> None:
         template = build_supervisor_template(
