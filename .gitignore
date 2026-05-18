@@ -14,5 +14,6 @@ __pycache__/
 !.subphd/reports/.gitkeep
 .subphd/synced-results/*
 !.subphd/synced-results/.gitkeep
+.subphd/state/*
 .subphd/logs/dashboard-start.stdout.log
 .subphd/logs/dashboard-start.stderr.log
